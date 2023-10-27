@@ -7,7 +7,7 @@ import time
 
 class Individual:
     def __init__(self,tsp,order=None,alpha=None):
-        self.alpha = max(0.1,0.1+0.2*random.random()) 
+        self.alpha = max(0.5,0.5+0.2*random.random()) 
         self.order = np.random.permutation(range(tsp.nCities))
         self.size = len(self.order)
 
@@ -42,7 +42,20 @@ class r0810938:
         return [Individual(self.tsp) for _ in range(self.p.lamb)]
 
          
-         
+    def nearestNeighbour(self):
+        start = np.random.randint(0,self.tsp.nCities)
+        path = [start]
+        mask = np.ones(self.tsp.nCities,dtype=bool)
+
+        mask[start] = False
+        for i in range(self.tsp.nCities-1):
+            last = path[-1]
+            next_ind = np.argmin(self.tsp.distanceMatrix[last][mask])
+            next_city = np.arange(self.tsp.nCities)[mask][next_ind]
+            path.append(next_city)
+            mask[next_city] = False
+        return Individual(self.tsp,order=np.array(path))
+             
     
     def convergenceTest(self):
          self.iter -= 1
@@ -106,10 +119,12 @@ class r0810938:
         
         # Create TSP problem instance and set parameters
         self.tsp = TSPProblem(distanceMatrix)
-        self.p = Parameters(lamb=100, mu=100, num_iters=100,k=5)
+        self.p = Parameters(lamb=100, mu=100, num_iters=100,k=10)
         self.iter = self.p.num_iters
         # Initialise population
         self.population = self.initPopulation()
+        # add nearest neighbour to population
+        self.population.append(self.nearestNeighbour())
 
         while(self.convergenceTest()):
             
