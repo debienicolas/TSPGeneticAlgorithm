@@ -37,12 +37,8 @@ class r0810938:
 
     # moet een indivdual meegeven
     def fitness(self, individual):
-        distance = []
-        distance = 0
-        for i in range(self.tsp.nCities-1):
-            distance += self.tsp.distanceMatrix[individual[i]][individual[i+1]]
+        distance = sum([self.tsp.distanceMatrix[individual[i]][individual[i+1]] for i in range(self.tsp.nCities-1)])
         distance += self.tsp.distanceMatrix[individual[self.tsp.nCities - 1]][individual[0]]
-        
         return distance
 
     ### K tournament selection
