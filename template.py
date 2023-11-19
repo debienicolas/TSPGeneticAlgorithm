@@ -7,7 +7,7 @@ import time
 
 class Individual:
     def __init__(self,tsp,order=None,alpha=None):
-        self.alpha = max(0.5,0.5+0.2*random.random()) 
+        self.alpha = max(0.1,0.2+0.2*random.random()) 
         self.order = np.random.permutation(range(tsp.nCities))
         self.size = len(self.order)
 
@@ -119,7 +119,7 @@ class r0810938:
         
         # Create TSP problem instance and set parameters
         self.tsp = TSPProblem(distanceMatrix)
-        self.p = Parameters(lamb=100, mu=100, num_iters=100,k=10)
+        self.p = Parameters(lamb=1000, mu=1000, num_iters=1000,k=5)
         self.iter = self.p.num_iters
         # Initialise population
         self.population = self.initPopulation()
