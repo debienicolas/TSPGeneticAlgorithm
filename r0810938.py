@@ -102,6 +102,39 @@ class r0810938:
         sorted_offspring = self.offspring[offspring_indices]
         return sorted_offspring[:self.p.lamb]
     
+    def distance(self,indv1,indv2):
+        # The distance between two individuals is the amount of different edges they have
+        # We can calculate this by taking the symmetric difference of the two individuals
+        # and dividing by two
+        edges_1 = list(zip(indv1, np.roll(indv1, -1)))
+        print("Edges 1: ", edges_1)
+        edges_2 = list(zip(indv2, np.roll(indv2, -1)))
+        print("Edges 2: ", edges_2)
+        similarity  = len([edge for edge in edges_1 if edge in edges_2])
+        print("Similarity: ", similarity)
+        print("distance: ", len(edges_1) - similarity)
+
+        return len(edges_1) - similarity
+    
+    def shared_elimination(self, population):
+        survivors = np.zeros((self.p.lamb,2))
+        for i in range(self.p.lamb):
+            # beta_init = 1, because we want to count the individual itself (has itself not copied into survivors!)
+			# Best possible approach to reduce computational cost --> Only recalculate fitness for the individuals that need recomputation 
+			# (for most of them, their fitness will stay the same)
+            fvals = lambda x
+
+    def shared_fitness_wrapper(self, fun, X, pop=None,beta_init=0):
+        if pop is None:
+            return fun(X)
+        
+        alpha = 1
+        sigma = 10
+        modified_fitness = np.zeros(X.shape[0])
+        for i, x in enumerate(X):
+            ds = self.distance(x,pop)
+
+
     # The evolutionary algorithm’s main loop
     def optimize(self, filename):
         # Read distance matrix from file.
@@ -134,6 +167,7 @@ class r0810938:
             
             ### Elimination
             print("elimination")
+            
             self.population = self.elimination()
             
             
@@ -158,7 +192,12 @@ class r0810938:
 if __name__ == '__main__':
     p = Parameters(lamb=200,mu=800,num_iters=500,k=5,alpha=0.25)
     algo = r0810938(p)
-    algo.optimize("Data/tour50.csv")
+    # algo.optimize("Data/tour50.csv")
+
+    indv1 = np.array([2,3,4,1,5])
+    indv2 = np.array([3,2,1,5,4])
+    print(algo.distance(indv1,indv2))
+
 
 
 
