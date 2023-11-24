@@ -8,6 +8,8 @@ import time
 import multiprocessing
 from timeit import default_timer as timer
 from numba import jit, njit
+import cProfile
+import pstats
 
 # Modify the class name to match your student number.
 class r0123456:
@@ -124,7 +126,7 @@ class r0123456:
             return np.inf
         edges1 = indv1.get_edges()
         edges2 = indv2.get_edges()
-        similarity = np.sum(np.isin(edges1,edges2))
+        similarity = len(set(edges1).intersection(edges2))
         return indv1.size - similarity
 
     def sharedFitnessWrapper(self, X, pop=None,betaInit = 0):
@@ -286,12 +288,22 @@ class Parameters:
 
 
 if __name__ == "__main__":
+    profiler = cProfile.Profile()
+    profiler.enable()
     p = Parameters(lamb=100, mu=100,num_iters=500,k=5,alpha=0.2)
     wandb.init(project="GAEC",
                config={"lamb": p.lamb, "mu": p.mu, "num_iters": p.num_iters, "k": p.k, "alpha": p.alpha})
     
     algo = r0123456(p)
     best = algo.optimize("Data/tour200.csv")
+
+    profiler.disable()
+    profiler.dump_stats("profile_2.prof")
+
+    stats = pstats.Stats("profile.prof")
+
+    stats.sort_stats('cumulative').print_stats()
+
     
 
     
