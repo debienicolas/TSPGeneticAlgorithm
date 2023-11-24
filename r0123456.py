@@ -1,3 +1,4 @@
+from hmac import new
 import pandas as pd
 import matplotlib.pyplot as plt
 import wandb
@@ -20,45 +21,34 @@ class r0123456:
         self.p = p
         self.timings = {}
     
-
-    def fitness(self,individual):
-        # calculate the fitness of the individual
-        # the fitness is the total distance of the cycle
-        distance = 0
-        for i in range(individual.size - 1):
-            distance += self.tsp.distanceMatrix[individual.order[i]][individual.order[i + 1]]
-        # remember to add the distance from the last city to the first city
-        distance += self.tsp.distanceMatrix[individual.order[individual.size - 1]][
-            individual.order[0]
-        ]
-        return distance
-
-
-    # k tournament selection
-    
-    def selection(self):
-        candidates = np.random.choice(self.population, self.p.k)
-        # candidates = random.sample(self.population, self.p.k)
-        return candidates[np.argmin([self.fitness(c) for c in candidates])]
-
+    @njit
     def initializePopulation(self):
-        self.population = np.array([Individual(self.tsp,alpha=self.p.alpha,order=None) for _ in range(self.p.lamb)],dtype=Individual)
-        for indv in self.population:
-            indv.originalFitness = self.fitness(indv)
-        
-        # while any(np.isinf([self.fitness(individual) for individual in self.population])):
-        #     for i, individual in enumerate(self.population):
-        #         if np.isinf(self.fitness(individual)):
-        #             self.population[i] = Individual(self.tsp,alpha=self.p.alpha,order=None)
-        
-        # return [Individual(tsp) for _ in range(p.lamb)]
+        # create the initial population with random np.permutations
+        population = np.zeros((self.p.lamb,self.length),dtype=int)
+        population = (lambda x: np.random.permutation(range(self.length)))(population)
+        return population
 
+    @njit
     def convergenceTest(self):
         self.iter -= 1
         return self.iter > 0
+    
+    @njit
+    def fitness(self,individual):
+        # calculate the fitness of the individual
+        # the fitness is the total distance of the cycle
+        indices = np.stack((individual,np.roll(individual,-1)),axis=1)
+        return np.sum(self.distanceMatrix[indices[:,0],indices[:,1]])
+    
+    @njit
+    def selection(self,population):
+        # k-tournament selection
+        chosen = population[np.random.choice(self.p.lamb,self.p.k,replace=False)]
+        return chosen[np.argmin(self.fitness(chosen))]
 
+    @njit
     def basicrossover(self,indv1, indv2):
-        solution = np.array([None] * indv1.size)
+        solution = np.zeros(indv1.size, dtype=int)
         min = np.random.randint(0, indv1.size - 1)
         max = np.random.randint(0, indv1.size - 1)
         if min > max:
@@ -70,19 +60,16 @@ class r0123456:
             while candidate in indv1.order[min:max]:
                 candidate = indv2.order[np.where(indv1.order == candidate)[0][0]]
             solution[i] = candidate
-
-        return Individual(self.tsp, alpha= self.p.alpha, order=solution)
-
-    def recombination(self,indv1, indv2):
-        return self.basicrossover(indv1, indv2)
+        return solution
 
     # swap mutation with chance alpha of individual
+    @njit
     def mutation(self, individual):
-        if random.random() < individual.alpha:
+        if np.random.random() < individual.alpha:
             self.InversionMutation(individual)
             self.InversionMutation(individual)
         
-    
+    @njit
     def InversionMutation(self, individual):
         i = random.randint(0, individual.size - 1)
         j = random.randint(0, individual.size - 1)
@@ -91,45 +78,42 @@ class r0123456:
         # reverse the order of the cities between i and j
         individual.order[i:j] = individual.order[i:j][::-1]
     
-    def twoOpt(self, individual):
-        max_samples = self.tsp.nCities
-        samples = int(max_samples * 0.2)
+    @njit
+    def full2Opt(self, individual):
         best_indiv = individual
         current_best = self.fitness(individual)
-        for i in np.random.choice(range(individual.size-1), samples):
-            for j in np.random.choice(range(individual.size-samples), samples):
-                new_order = individual.order.copy()
+        for i in range(individual.size-1):
+            for j in range(i,individual.size-1):
+                new_order = individual.copy()
                 new_order[i], new_order[j] = new_order[j], new_order[i]
-                new_individual = Individual(self.tsp, alpha=self.p.alpha, order=new_order)
-                new_fitness = self.fitness(new_individual)
+                new_fitness = self.fitness(new_order)
                 if new_fitness < current_best:
-                    best_indiv = new_individual
+                    best_indiv = new_order
         return best_indiv
     
-    def lsoSwap(self, individual):
+    @njit
+    def lsoSwap(self, individual, n=1):
         best_indiv = individual
         current_best = self.fitness(individual)
-        for i in range(individual.size-3):
-            for j in range(2):
-                new_order = individual.order.copy()
+        for i in range(individual.size-(n+1)):
+            for j in range(1,n):
+                new_order = individual.copy()
                 new_order[i],new_order[i+j] = new_order[i+j],new_order[i]
-                new_individual = Individual(self.tsp, alpha=self.p.alpha, order=new_order)
-                new_fitness = self.fitness(new_individual)
+                new_fitness = self.fitness(new_order)
                 if new_fitness < current_best:
-                    best_indiv = new_individual
+                    best_indiv = new_order
         return best_indiv
             
 
-    
+    @njit
     def distance(self,indv1,indv2):
-        if not isinstance(indv2,Individual):
-            return np.inf
-        edges1 = indv1.get_edges()
-        edges2 = indv2.get_edges()
+        edges1 = np.stack((indv1,np.roll(indv1,-1)),axis=1)
+        edges2 = np.stack((indv2,np.roll(indv2,-1)),axis=1)
         similarity = len(set(edges1).intersection(edges2))
         return indv1.size - similarity
 
-    def sharedFitnessWrapper(self, X, pop=None,betaInit = 0):
+
+    def sharedFitnessWrapper(self, X, pop=None, betaInit = 0):
         if pop is None:
             return np.vectorize(self.fitness)(X)
         
@@ -169,16 +153,6 @@ class r0123456:
         sorted_combined = combined[np.argsort(fvals)]
         return sorted_combined[:self.p.lamb]
     
-    def createOffspring_individual(self, i):
-        p1 = self.selection()
-        p2 = self.selection()
-        self.offspring[i] = self.recombination(p1,p2)
-        self.mutation(self.offspring[i])
-        # local search operator
-        if self.iter % 2 == 0 and self.iter <= self.p.num_iters - 100:
-            self.offspring[i] = self.lsoSwap(self.offspring[i])
-        return self.offspring[i]
-    
 
     # The evolutionary algorithm's main loop
     def optimize(self, filename):
@@ -186,33 +160,34 @@ class r0123456:
         distanceMatrix = None
         with open(filename) as file:
             distanceMatrix = np.loadtxt(file, delimiter=",")
-        # Your code here.
 
-        # Create a TSP problem instance.
-        self.tsp = TSPProblem(distanceMatrix)
 
-        ### Population initialization
-       
-        self.iter = p.num_iters
+        ### Declaration of variables ###
+        self.length = len(distanceMatrix)
+        self.iter = self.p.num_iters
+        self.distanceMatrix = distanceMatrix
+        # self.pool =  multiprocessing.Pool(multiprocessing.cpu_count())
+
+        ### Population initialization ###
         start = timer()
-        self.initializePopulation()
+        population = self.initializePopulation()
         end = timer()
         self.timings["initialization"] = end - start
 
-        pool = multiprocessing.Pool()
-
-
+        
         while(self.convergenceTest()):
             
             ### Create offspring population
             start = timer()
             self.offspring = np.zeros(p.mu, dtype=Individual)
-            if self.iter % 2 == 0 and self.iter <= self.p.num_iters - 100:
-                offspring_indv = pool.map(self.createOffspring_individual, range(p.mu))
-                self.offspring = np.array(offspring_indv)
-            else:
-                for i in range(self.p.mu):
-                    self.offspring[i] = self.createOffspring_individual(i)
+            for i in range(self.p.mu):
+                p1 = self.selection(population)
+                p2 = self.selection(population)
+                self.offspring[i] = self.basicrossover(p1,p2)
+                self.mutation(self.offspring[i])
+                # local search operator
+                if self.iter % 2 == 0 and self.iter <= self.p.num_iters - 100:
+                    self.offspring[i] = self.lsoSwap(self.offspring[i])
             end = timer()
             self.timings["create offspring"] = end - start
             
