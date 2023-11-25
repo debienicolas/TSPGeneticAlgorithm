@@ -21,64 +21,61 @@ class r0123456:
         self.p = p
         self.timings = {}
     
-    @njit
     def initializePopulation(self):
         # create the initial population with random np.permutations
-        population = np.zeros((self.p.lamb,self.length),dtype=int)
-        population = (lambda x: np.random.permutation(range(self.length)))(population)
+        population = np.zeros((self.p.lamb, self.length), dtype=int)
+        for i in range(self.p.lamb):
+            population[i] = np.random.permutation(self.length)
         return population
 
-    @njit
     def convergenceTest(self):
         self.iter -= 1
         return self.iter > 0
     
-    @njit
     def fitness(self,individual):
         # calculate the fitness of the individual
         # the fitness is the total distance of the cycle
         indices = np.stack((individual,np.roll(individual,-1)),axis=1)
         return np.sum(self.distanceMatrix[indices[:,0],indices[:,1]])
     
-    @njit
     def selection(self,population):
         # k-tournament selection
+        chosen_idx = np.random.choice(self.p.lamb,self.p.k,replace=False)
+        chosen = population[chosen_idx]
         chosen = population[np.random.choice(self.p.lamb,self.p.k,replace=False)]
         return chosen[np.argmin(self.fitness(chosen))]
 
-    @njit
     def basicrossover(self,indv1, indv2):
         solution = np.zeros(indv1.size, dtype=int)
+        print(indv1.size)
+        print(indv1)
         min = np.random.randint(0, indv1.size - 1)
         max = np.random.randint(0, indv1.size - 1)
         if min > max:
             min, max = max, min
-        solution[min:max] = indv1.order[min:max]
+        solution[min:max] = indv1[min:max]
         # i in alles wat er buiten zit
         for i in np.concatenate([np.arange(0, min), np.arange(max, indv1.size)]):
-            candidate = indv2.order[i]
-            while candidate in indv1.order[min:max]:
-                candidate = indv2.order[np.where(indv1.order == candidate)[0][0]]
+            candidate = indv2[i]
+            while candidate in indv1[min:max]:
+                candidate = indv2[np.where(indv1 == candidate)[0][0]]
             solution[i] = candidate
         return solution
 
     # swap mutation with chance alpha of individual
-    @njit
     def mutation(self, individual):
         if np.random.random() < individual.alpha:
             self.InversionMutation(individual)
             self.InversionMutation(individual)
         
-    @njit
     def InversionMutation(self, individual):
         i = random.randint(0, individual.size - 1)
         j = random.randint(0, individual.size - 1)
         if i > j:
             i, j = j, i
         # reverse the order of the cities between i and j
-        individual.order[i:j] = individual.order[i:j][::-1]
+        individual[i:j] = individual[i:j][::-1]
     
-    @njit
     def full2Opt(self, individual):
         best_indiv = individual
         current_best = self.fitness(individual)
@@ -91,7 +88,6 @@ class r0123456:
                     best_indiv = new_order
         return best_indiv
     
-    @njit
     def lsoSwap(self, individual, n=1):
         best_indiv = individual
         current_best = self.fitness(individual)
@@ -105,7 +101,7 @@ class r0123456:
         return best_indiv
             
 
-    @njit
+    
     def distance(self,indv1,indv2):
         edges1 = np.stack((indv1,np.roll(indv1,-1)),axis=1)
         edges2 = np.stack((indv2,np.roll(indv2,-1)),axis=1)
@@ -117,13 +113,12 @@ class r0123456:
         if pop is None:
             return np.vectorize(self.fitness)(X)
         
-        modFitnesses = np.zeros(X.shape[0])
-        max_distance = self.tsp.nCities
+        modFitnesses = np.zeros(X.shape[0],dtype=int)
+        max_distance = self.length
         alpha = 1
         sigma = 0.5 * max_distance
         for i,x in enumerate(X):
-            distances = np.array([self.distance(x,y) for y in pop])
-            #distances = np.vectorize(self.distance)(x,pop)
+            distances = self.distance(x,pop)
             onePlusBeta = betaInit
             within_sigma = distances <= sigma
             onePlusBeta = betaInit + np.sum(1 - (distances[within_sigma] / sigma) ** alpha)
@@ -171,6 +166,7 @@ class r0123456:
         ### Population initialization ###
         start = timer()
         population = self.initializePopulation()
+        alpha = np.full((self.p.lamb),max(self.p.alpha, self.p.alpha + 0.2 * np.random.random()))
         end = timer()
         self.timings["initialization"] = end - start
 
@@ -179,7 +175,7 @@ class r0123456:
             
             ### Create offspring population
             start = timer()
-            self.offspring = np.zeros(p.mu, dtype=Individual)
+            self.offspring = np.zeros((p.mu,self.length), dtype=int)
             for i in range(self.p.mu):
                 p1 = self.selection(population)
                 p2 = self.selection(population)
@@ -193,7 +189,7 @@ class r0123456:
             
             ### Mutate the original population
             start = timer()
-            for ind in self.population:
+            for ind in population:
                 self.mutation(ind)
             end = timer()
             self.timings["mutation"] = end - start
@@ -213,7 +209,7 @@ class r0123456:
             fitnesses = np.vectorize(self.fitness)(self.population)
             meanObjective = np.mean(fitnesses)
             bestObjective = np.min(fitnesses)
-            bestSolution = self.population[np.argmin(fitnesses)].order
+            bestSolution = self.population[np.argmin(fitnesses)]
             diversityScore = len(set(fitnesses))
 
             timeLeft = self.reporter.report(meanObjective, bestObjective, bestSolution)
@@ -240,7 +236,6 @@ class Individual:
             self.size = len(self.order)
         self.edges = None
     
-    @jit
     def get_edges(self):
         if self.edges is None:
             self.edges = list(zip(self.order,np.roll(self.order,-1)))
@@ -275,9 +270,9 @@ if __name__ == "__main__":
     profiler.disable()
     profiler.dump_stats("profile_2.prof")
 
-    stats = pstats.Stats("profile.prof")
+    stats = pstats.Stats("profile_2.prof")
 
-    stats.sort_stats('cumulative').print_stats()
+    stats.sort_stats('cumulative').print_stats(20)
 
     
 
