@@ -1,17 +1,61 @@
-from hmac import new
 import pandas as pd
 import matplotlib.pyplot as plt
 import wandb
 import Reporter
 import numpy as np
 import random
-import time
+import timeit
 import multiprocessing
 from timeit import default_timer as timer
 from numba import jit, njit
 import cProfile
 import pstats
 
+@njit
+def standardise(individual):
+    # given a permutation, standardise it, i.e. make it start with 0
+    idx = np.where(individual == 0)[0][0]
+    return np.roll(individual,-idx)
+
+@njit
+def fitness(distanceMatrix,individual):
+    # calculate the fitness of the individual
+    # the fitness is the total distance of the cycle
+    indices = np.stack((individual,np.roll(individual,-1)),axis=1)
+
+    # return np.sum(distanceMatrix[indices[:,0],indices[:,1]])
+    distance = 0
+    for i in indices:
+        if distanceMatrix[i[0],i[1]] == np.inf:
+            return np.inf
+        distance += distanceMatrix[i[0],i[1]]
+    return distance
+
+@njit
+def distance(indv1,indv2):
+    edges1 = np.column_stack((indv1, np.roll(indv1, -1)))
+    edges2 = np.column_stack((indv2, np.roll(indv2, -1)))
+    #similarity = np.count_nonzero((edges1[:,None] == edges2).all(-1).any(-1))
+    similarity = 0
+    for i in edges1:
+        for j in edges2:
+            if i[0] == j[0] and i[1] == j[1]:
+                similarity += 1
+    distance = indv1.size - similarity
+    return distance
+@njit
+def full2Opt(distanceMatrix,individual):
+        best_indiv = individual
+        current_best = fitness(distanceMatrix,individual)
+        for i in range(individual.size-1):
+            for j in range(i,individual.size-1):
+                new_order = individual.copy()
+                new_order[i], new_order[j] = new_order[j], new_order[i]
+                new_fitness = fitness(distanceMatrix,new_order)
+                if new_fitness < current_best:
+                    best_indiv = new_order
+        return best_indiv
+        
 # Modify the class name to match your student number.
 class r0123456:
     def __init__(self,p):
@@ -20,6 +64,7 @@ class r0123456:
         self.population = None
         self.p = p
         self.timings = {}
+        self.used_dist_map = 0
     
     def initializePopulation(self):
         # create the initial population with random np.permutations
@@ -27,28 +72,21 @@ class r0123456:
         for i in range(self.p.lamb):
             population[i] = np.random.permutation(self.length)
         return population
+    
 
     def convergenceTest(self):
         self.iter -= 1
         return self.iter > 0
     
-    def fitness(self,individual):
-        # calculate the fitness of the individual
-        # the fitness is the total distance of the cycle
-        indices = np.stack((individual,np.roll(individual,-1)),axis=1)
-        return np.sum(self.distanceMatrix[indices[:,0],indices[:,1]])
     
     def selection(self,population):
         # k-tournament selection
-        chosen_idx = np.random.choice(self.p.lamb,self.p.k,replace=False)
-        chosen = population[chosen_idx]
         chosen = population[np.random.choice(self.p.lamb,self.p.k,replace=False)]
-        return chosen[np.argmin(self.fitness(chosen))]
+        fvals = np.array([fitness(self.distanceMatrix,ind) for ind in chosen])
+        return chosen[np.argmin(fvals)]
 
     def basicrossover(self,indv1, indv2):
         solution = np.zeros(indv1.size, dtype=int)
-        print(indv1.size)
-        print(indv1)
         min = np.random.randint(0, indv1.size - 1)
         max = np.random.randint(0, indv1.size - 1)
         if min > max:
@@ -63,8 +101,8 @@ class r0123456:
         return solution
 
     # swap mutation with chance alpha of individual
-    def mutation(self, individual):
-        if np.random.random() < individual.alpha:
+    def mutation(self, individual, alpha):
+        if np.random.random() < alpha:
             self.InversionMutation(individual)
             self.InversionMutation(individual)
         
@@ -78,73 +116,89 @@ class r0123456:
     
     def full2Opt(self, individual):
         best_indiv = individual
-        current_best = self.fitness(individual)
+        current_best = fitness(self.distanceMatrix,individual)
         for i in range(individual.size-1):
             for j in range(i,individual.size-1):
                 new_order = individual.copy()
                 new_order[i], new_order[j] = new_order[j], new_order[i]
-                new_fitness = self.fitness(new_order)
+                new_fitness = fitness(self.distanceMatrix,new_order)
                 if new_fitness < current_best:
                     best_indiv = new_order
         return best_indiv
     
     def lsoSwap(self, individual, n=1):
         best_indiv = individual
-        current_best = self.fitness(individual)
+        current_best = fitness(self.distanceMatrix,individual)
         for i in range(individual.size-(n+1)):
             for j in range(1,n):
                 new_order = individual.copy()
                 new_order[i],new_order[i+j] = new_order[i+j],new_order[i]
-                new_fitness = self.fitness(new_order)
+                new_fitness = fitness(self.distanceMatrix,new_order)
                 if new_fitness < current_best:
                     best_indiv = new_order
         return best_indiv
-            
-
-    
-    def distance(self,indv1,indv2):
-        edges1 = np.stack((indv1,np.roll(indv1,-1)),axis=1)
-        edges2 = np.stack((indv2,np.roll(indv2,-1)),axis=1)
-        similarity = len(set(edges1).intersection(edges2))
-        return indv1.size - similarity
-
+        
 
     def sharedFitnessWrapper(self, X, pop=None, betaInit = 0):
         if pop is None:
-            return np.vectorize(self.fitness)(X)
+            return np.array([fitness(self.distanceMatrix,x) for x in X])
         
-        modFitnesses = np.zeros(X.shape[0],dtype=int)
+        modFitnesses = np.zeros(X.shape[0])
+
         max_distance = self.length
-        alpha = 1
-        sigma = 0.5 * max_distance
+        alpha = 0.5
+        sigma = 0.3 * max_distance
         for i,x in enumerate(X):
-            distances = self.distance(x,pop)
+            # distances = self.distance(x,pop)
+            #distances = np.vectorize(lambda y: self.distance(x,y))(pop)
+            distances = np.zeros(pop.shape[0])
+            for j,y in enumerate(pop):
+                dist1 = self.distanceMap.get((standardise(x).tobytes(),standardise(y).tobytes()))
+                if dist1 is not None:
+                    distances[j] = dist1
+                    continue
+                dist2 = self.distanceMap.get((standardise(x).tobytes(),standardise(y).tobytes()))
+                if dist2 is not None:
+                    distances[j] = dist2
+                    continue
+                else:
+                    dist = distance(x,y)
+                    self.distanceMap[(standardise(x).tobytes(),standardise(y).tobytes())] = dist
+            
             onePlusBeta = betaInit
             within_sigma = distances <= sigma
             onePlusBeta = betaInit + np.sum(1 - (distances[within_sigma] / sigma) ** alpha)
-            fitnessval = self.fitness(x)
-            modFitnesses[i] = fitnessval *onePlusBeta** np.sign(fitnessval)
+            fitnessval = fitness(self.distanceMatrix,x)
+            if fitnessval == np.inf:
+                modFitnesses[i] = np.inf
+            else:
+                modFitnesses[i] = fitnessval *onePlusBeta** np.sign(fitnessval)
         
         return modFitnesses
 
-    def sharedElimination(self):
-        combined = np.concatenate((self.population, self.offspring), axis=0)
-        survivors = np.zeros((self.p.lamb),dtype=Individual)
+    def sharedElimination(self, population, offspring):
+        combined = np.concatenate((population,offspring), axis=0)
+        survivors = np.zeros((self.p.lamb,self.length),dtype=int)
         for i in range(self.p.lamb):
+            #print("survivor chosen: ", i)
             if i == 0:
-                survivors[i] = combined[np.argmin(np.vectorize(self.fitness)(combined))]
+                best_idx = np.argmin(np.array([fitness(self.distanceMatrix,ind) for ind in combined]))
+                survivors[i] = combined[best_idx]
+                np.delete(combined,best_idx,0)
             else :
-                fvals = self.sharedFitnessWrapper(combined, survivors[0:i],betaInit=1)   
+                # instead of calculating the updated fitness for all, only do it for the top 50% of the population
+                fvals = self.sharedFitnessWrapper(combined, survivors[0:i,:],betaInit=1)   
                 idx = np.argmin(fvals)
                 survivors[i] = combined[idx]
+                np.delete(combined,idx,0)
         return survivors
 
 	# mu , lambda elimination
-    def elimination(self):
+    def elimination(self, population, offspring):
         # combine the offspring and the original population
-        combined = np.concatenate((self.population, self.offspring), axis=0)
+        combined = np.concatenate((population, offspring), axis=0)
         # sort the combined population by fitness
-        fvals = np.vectorize(self.fitness)(combined)
+        fvals = np.array([fitness(self.distanceMatrix,ind) for ind in combined])
         sorted_combined = combined[np.argsort(fvals)]
         return sorted_combined[:self.p.lamb]
     
@@ -161,12 +215,14 @@ class r0123456:
         self.length = len(distanceMatrix)
         self.iter = self.p.num_iters
         self.distanceMatrix = distanceMatrix
+        self.distanceMap = {}
+        self.fitnessMap = {}
         # self.pool =  multiprocessing.Pool(multiprocessing.cpu_count())
 
         ### Population initialization ###
         start = timer()
         population = self.initializePopulation()
-        alpha = np.full((self.p.lamb),max(self.p.alpha, self.p.alpha + 0.2 * np.random.random()))
+        alphas = np.full((self.p.lamb),max(self.p.alpha, self.p.alpha + 0.2 * np.random.random()))
         end = timer()
         self.timings["initialization"] = end - start
 
@@ -175,48 +231,49 @@ class r0123456:
             
             ### Create offspring population
             start = timer()
-            self.offspring = np.zeros((p.mu,self.length), dtype=int)
+            offspring = np.zeros((p.mu,self.length), dtype=int)
+            alphas_offspring = np.full((self.p.mu),max(self.p.alpha, self.p.alpha + 0.2 * np.random.random()))
             for i in range(self.p.mu):
                 p1 = self.selection(population)
                 p2 = self.selection(population)
-                self.offspring[i] = self.basicrossover(p1,p2)
-                self.mutation(self.offspring[i])
-                # local search operator
-                if self.iter % 2 == 0 and self.iter <= self.p.num_iters - 100:
-                    self.offspring[i] = self.lsoSwap(self.offspring[i])
+                offspring[i] = self.basicrossover(p1,p2)
+                self.mutation(offspring[i],alphas_offspring[i])
+                if self.iter % 5 == 0:
+                    offspring[i] = full2Opt(self.distanceMatrix,offspring[i])
             end = timer()
             self.timings["create offspring"] = end - start
             
+            
             ### Mutate the original population
             start = timer()
-            for ind in population:
-                self.mutation(ind)
+            for i,ind in enumerate(population):
+                self.mutation(ind,alphas[i])
             end = timer()
             self.timings["mutation"] = end - start
             
-            # if self.iter >= self.p.num_iters - 10:
-            #     self.population = self.sharedElimination()
-            # else:
-            #     self.population = self.elimination()
+            
             start = timer()
-            if self.iter % 50 == 0 and self.iter >= self.p.num_iters - 150:
-                self.population = self.sharedElimination()
+            if self.iter % 5 == 0 and self.iter >= 420:
+                population = self.sharedElimination(population, offspring)
             else:
-                self.population = self.elimination()
+                population = self.elimination(population,offspring)
             end = timer()
             self.timings["elimination"] = end - start
 
-            fitnesses = np.vectorize(self.fitness)(self.population)
+            fitnesses = np.array([fitness(self.distanceMatrix,i) for i in population])
+            
             meanObjective = np.mean(fitnesses)
             bestObjective = np.min(fitnesses)
-            bestSolution = self.population[np.argmin(fitnesses)]
+            bestSolution = population[np.argmin(fitnesses)]
             diversityScore = len(set(fitnesses))
 
             timeLeft = self.reporter.report(meanObjective, bestObjective, bestSolution)
 
             print("Mean objective: ", round(meanObjective,2),"     Best Objective: ", round(bestObjective,2),"     Iterations to go: ",self.iter, "     Diversity score: ", diversityScore, "     Time left: ", round(timeLeft,2))
-            wandb.log({"mean objective": meanObjective, "best objective": bestObjective, "diversity score": diversityScore})
-            wandb.log(self.timings)
+            if self.p.wandb:
+                wandb.log({"mean objective": meanObjective, "best objective": bestObjective, "diversity score": diversityScore} | 
+                          self.timings |
+                          {"used dist map": self.used_dist_map})
 
             if timeLeft < 0:
                 break
@@ -249,23 +306,30 @@ class TSPProblem:
 
 
 class Parameters:
-    def __init__(self, lamb, mu, num_iters, k,alpha):
+    def __init__(self, lamb, mu, num_iters, k,alpha,alpha_sharing,sigmaPerc):
         self.lamb = lamb  # Population size
         self.mu = mu  # Amount of offspring
         self.num_iters = num_iters  # How many times to create offspring
         self.k = k  # k for k-tournament selection
         self.alpha = alpha # chance of mutation
+        self.wandb = True
+        self.alpha_sharing = alpha_sharing
+        self.sigmaPerc = sigmaPerc
 
 
 if __name__ == "__main__":
     profiler = cProfile.Profile()
     profiler.enable()
-    p = Parameters(lamb=100, mu=100,num_iters=500,k=5,alpha=0.2)
-    wandb.init(project="GAEC",
-               config={"lamb": p.lamb, "mu": p.mu, "num_iters": p.num_iters, "k": p.k, "alpha": p.alpha})
+    p = Parameters(lamb=100, mu=100,num_iters=500,k=5,alpha=0.2,alpha_sharing=0.5,sigmaPerc=0.3)
+    if p.wandb:
+        wandb.init(project="GAEC",
+                config={"lamb": p.lamb, "mu": p.mu, "num_iters": p.num_iters, "k": p.k, "alpha": p.alpha})
     
+    ind = np.array([0,1,2,3,4,5,6,7,8,9])
+    timeit.timeit()
+
     algo = r0123456(p)
-    best = algo.optimize("Data/tour200.csv")
+    best = algo.optimize("Data/tour50.csv")
 
     profiler.disable()
     profiler.dump_stats("profile_2.prof")
