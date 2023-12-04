@@ -1,4 +1,7 @@
+from asyncio import futures
+import copy
 from hmac import new
+from math import dist
 from turtle import st
 from cv2 import add
 import pandas as pd
@@ -14,10 +17,20 @@ from timeit import default_timer as timer
 from numba import jit, njit
 import cProfile
 import pstats
+import math
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+INF = 1000000000000000
 
 @njit
 def standardise(individual):
     # given a permutation, standardise it, i.e. make it start with 0
+    idx = 0
+    for i in range(len(individual)):
+        if individual[i] == 0:
+            idx = i
+            break
+    return np.roll(individual,-idx)
     idx = np.where(individual == 0)[0][0]
     return np.roll(individual,-idx)
 
@@ -30,7 +43,7 @@ def fitness(distanceMatrix,individual):
     # return np.sum(distanceMatrix[indices[:,0],indices[:,1]])
     distance = 0
     for i in indices:
-        if distanceMatrix[i[0],i[1]] == np.inf:
+        if distanceMatrix[i[0],i[1]] >= INF:
             return np.inf
         distance += distanceMatrix[i[0],i[1]]
     return distance
@@ -47,25 +60,47 @@ def distance(indv1,indv2):
                 similarity += 1
     distance = indv1.size - similarity
     return distance
+
 @njit
-def full2Opt(distanceMatrix,individual):
-        best_indiv = individual
-        current_best = fitness(distanceMatrix,individual)
-        for i in range(individual.size-1):
-            for j in range(i,individual.size-1):
-                new_order = individual.copy()
-                new_order[i], new_order[j] = new_order[j], new_order[i]
-                new_fitness = fitness(distanceMatrix,new_order)
+def opt2swap(indv1, i,j):
+    new_order = np.empty_like(indv1)
+    # take route[0] to route[i] and add them in order to new_route
+    new_order[:i+1] = indv1[:i+1]
+    # take route[i+1] to route[j] and add them in reverse order to new_route
+    new_order[i+1:j+1] = indv1[j:i:-1]
+    # take route[j+1] to end and add them in order to new_route
+    new_order[j+1:] = indv1[j+1:]
+    return new_order
+
+@njit
+def opt2Full(distM,offspring):
+    for k in range(offspring.size):
+        offspring[k] = opt2(distM,offspring[k])
+    return offspring
+
+@njit 
+def opt2(distM,indv):
+    best_indiv = indv
+    current_best = fitness(distM,indv)
+    size = indv.size
+    for i in range(size - 1):
+        for j in range(i+1,size):
+            lengthDelta = -distM[indv[i],indv[i+1]] - distM[indv[j],indv[(j+1)]] + distM[indv[i+1],indv[j+1]] + distM[indv[i],indv[j]]
+            if lengthDelta < 0:
+                new_order = opt2swap(indv,i,j)
+                new_fitness = fitness(distM,new_order)
                 if new_fitness < current_best:
                     best_indiv = new_order
-        return best_indiv
+                    current_best = new_fitness
+    return best_indiv
+
 
 @njit
 def inversionMutation(individual):
     i,j = np.sort(np.random.choice(individual.size,2,replace=False))
     individual[i:j+1] = individual[i:j+1][::-1]
 
-@njit
+
 def add_edge(s,n):
     if n in s:
         s.remove(n)
@@ -74,9 +109,10 @@ def add_edge(s,n):
         s.add(n)
     return s
     
-@njit
-def construct_edge_table(parent1, parent2,edge_table):
+
+def construct_edge_table(parent1, parent2):
     size = parent1.size
+    edge_table = {i:set() for i in range(size)}
     for i in range(size):
         # add neighbors from parent1
         neighbor = parent1[(i+1)%size]
@@ -91,8 +127,8 @@ def construct_edge_table(parent1, parent2,edge_table):
         edge_table[parent2city] = add_edge(edge_table[parent2city],neighbor)
         neighbor = parent2[i-1]
         edge_table[parent2city] = add_edge(edge_table[parent2city],neighbor)
-
     return edge_table
+
 
 @njit
 def orderCrossover(indv1, indv2,offspring):
@@ -171,8 +207,7 @@ class r0123456:
     
     def edgeCrossover(self, indv1, indv2):
         # Construct edge table
-        edge_table = {i:set() for i in range(indv1.size)}
-        edge_table = construct_edge_table(indv1, indv2,edge_table)
+        edge_table = construct_edge_table(indv1, indv2)
         length = len(indv1)
         # Initialize new order with -1
         new_order = np.full(length, -1, dtype=int)
@@ -302,7 +337,7 @@ class r0123456:
         # shuffle the cities between i and j
         individual[i:j] = np.random.permutation(individual[i:j])
     
-    def full2Opt(self, individual):
+    def lso(self, individual):
         best_indiv = individual
         current_best = fitness(self.distanceMatrix,individual)
         for i in range(individual.size-1):
@@ -392,9 +427,16 @@ class r0123456:
         fvals = np.array([fitness(self.distanceMatrix,ind) for ind in combined])
         sorted_combined = combined[np.argsort(fvals)]
         return sorted_combined[:self.p.lamb]
-
-
     
+    def createOffspring(self, population, alpha):
+        p1 = self.selection(population)
+        p2 = self.selection(population)
+        if self.iter != 0:
+            offspring = self.edgeCrossover(p1,p2)
+        else:
+            offspring = basicrossover(p1,p2,np.zeros(self.length,dtype=int))
+        self.mutation(offspring,alpha)
+        return offspring
 
     # The evolutionary algorithm's main loop
     def optimize(self, filename):
@@ -424,27 +466,41 @@ class r0123456:
 
             
             ### Create offspring population
-            
+            start = timer()
             offspring = np.zeros((p.mu,self.length), dtype=int)
             alphas_offspring = np.full((self.p.mu),max(self.p.alpha, self.p.alpha + 0.2 * np.random.random()))
-            for i in range(self.p.mu):
-                p1 = self.selection(population)
-                p2 = self.selection(population)
+            # for i in range(self.p.mu):
+            #     p1 = self.selection(population)
+            #     p2 = self.selection(population)
+            #     start = timer()
+            #     if self.iter % 4 == 0:
+            #         offspring[i] = self.edgeCrossover(p1,p2)
+            #     else:
+            #         offspring[i] = basicrossover(p1,p2,offspring[i])
+            #     end = timer()
+            #     self.timings["create offspring"] = end - start
+            #     self.mutation(offspring[i],alphas_offspring[i])
+            #     if self.iter % 5 == 0:
+            #         start = timer()
+            #         offspring[i] = opt2(self.distanceMatrix,offspring[i])
+            #         end = timer()
+            #         self.timings["LSO"] = end - start
+
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                futures = [executor.submit(self.createOffspring, population,alphas_offspring[i]) for i in range(self.p.mu)]
+                for i, future in enumerate(as_completed(futures)):
+                    offspring[i] = future.result()
+            end = timer()
+            self.timings["create offspring"] = end - start
+
+            if self.iter % 3 == 0:
                 start = timer()
-                if self.iter <= 50:
-                    offspring[i] = self.edgeCrossover(p1,p2)
-                else:
-                    offspring[i] = basicrossover(p1,p2,offspring[i])
+                for i in range(self.p.mu):
+                    offspring[i] = opt2(self.distanceMatrix,offspring[i])
                 end = timer()
-                self.timings["create offspring"] = end - start
-                self.mutation(offspring[i],alphas_offspring[i])
-                if self.iter % 5 == 0:
-                    start = timer()
-                    offspring[i] = full2Opt(self.distanceMatrix,offspring[i])
-                    end = timer()
-                    self.timings["LSO"] = end - start
+                self.timings["LSO"] = end - start
             
-            
+
             ### Mutate the original population
             start = timer()
             for i,ind in enumerate(population):
@@ -454,8 +510,10 @@ class r0123456:
             
             
             start = timer()
-            if self.iter % 5 == 0 and self.iter <= 80:
+            if self.iter == self.p.sharedElim:
                 population = self.sharedElimination(population, offspring)
+                self.p.sharedElim = self.p.sharedElim + math.floor(math.pow(2, math.log(self.p.sharedElim+1, 3)))
+                print("shared elimination")
             else:
                 population = self.elimination(population,offspring)
             end = timer()
@@ -515,19 +573,19 @@ class Parameters:
         self.wandb = False
         self.alpha_sharing = alpha_sharing
         self.sigmaPerc = sigmaPerc
+        self.sharedElim = 1
 
 
 if __name__ == "__main__":
     profiler = cProfile.Profile()
     profiler.enable()
-    p = Parameters(lamb=100, mu=100,num_iters=600,k=5,alpha=0.05,alpha_sharing=0.5,sigmaPerc=0.3)
+    p = Parameters(lamb=100, mu=100,num_iters=700,k=5,alpha=0.05,alpha_sharing=0.5,sigmaPerc=0.3)
     if p.wandb:
         wandb.init(project="GAEC",
-                   name = "EdgeCrossover (0-50) + PMX",
+                   name = "EdgeCrossover threads(4) evo shared fitness",
                 config={"lamb": p.lamb, "mu": p.mu, "num_iters": p.num_iters, "k": p.k, "alpha": p.alpha})
     
-    ind = np.array([0,1,2,3,4,5,6,7,8,9])
-    timeit.timeit()
+    
 
     algo = r0123456(p)
     best = algo.optimize("Data/tour200.csv")
@@ -539,12 +597,12 @@ if __name__ == "__main__":
     # print(algo.orderCrossover(indv1,indv2))
     # print(algo.cycle_crossover(indv1,indv2))
    
-    # profiler.disable()
-    # profiler.dump_stats("profile_2.prof")
+    profiler.disable()
+    profiler.dump_stats("profile.prof")
 
-    # stats = pstats.Stats("profile_2.prof")
+    stats = pstats.Stats("profile.prof")
 
-    # stats.sort_stats('cumulative').print_stats(20)
+    stats.sort_stats('cumulative').print_stats(20)
 
     
 
