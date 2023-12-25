@@ -8,7 +8,7 @@ class Test(unittest.TestCase):
 
     def __init__(self, methodName: str = "runTest") -> None:
         super().__init__(methodName)
-        self.p = Parameters(10, 10, 10, 10, 0.5)
+        self.p = Parameters(lamb=15, mu=15,num_iters=1500,k=9,alpha=0.05,alpha_sharing=0.20,sigmaPerc=0.4)
         self.algo = r0123456(self.p)
     
     # def standardiseTest(self):
@@ -18,6 +18,16 @@ class Test(unittest.TestCase):
     #     self.assertEqual(self.algo.standardise(indv_2), np.array([0, 1, 2,3]))
     #     individ3 = np.array([2,1,3,0])
     #     self.assertEqual(self.algo.standardise(individ3), np.array([0,2,1,3]))
+    
+    def test_greedyInit(self):
+        with open("Data/tour200.csv") as file:
+            self.algo.distanceMatrix = np.loadtxt(file, delimiter=",")
+            self.algo.length = self.algo.distanceMatrix.shape[0]
+        indv = initialize_greedily(self.algo.distanceMatrix)
+        print(indv.dtype)
+        print(len(indv))
+        print(fitness(self.algo.distanceMatrix, indv))
+
     
     def test_distance(self):
         def distance(indv1, indv2):

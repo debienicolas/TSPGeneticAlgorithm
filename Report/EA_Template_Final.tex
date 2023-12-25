@@ -1,5 +1,6 @@
 \documentclass[a4paper,10pt]{article}
 \usepackage[utf8]{inputenc}
+\usepackage{comment}
 
 \usepackage[english]{babel}
 \usepackage[dvinames]{xcolor}
@@ -42,7 +43,7 @@
 
 \maketitle
 
-\section{\RemoveMe{Formal requirements}} \label{sec_this}
+\section{\RemoveMe{Formal requirements}}\label{sec_this}
 
 \RemoveMe{The report is structured for fair and efficient grading of over 100 individual projects in the space of only a few days. Please respect the exact structure of this document. You are allowed to remove sections \ref{sec_this} and \ref{sec_other}. Brevity is the soul of wit: a good report will be \textbf{around $7$ pages} long. The hard limit is 10 pages. 
 
@@ -108,23 +109,40 @@ This report should be uploaded to Toledo by \deadlineReport. It must be in the \
 
 \subsection{Representation}\label{sec_rep}
 
-\ReplaceMe{How do you represent the candidate solutions? What is your motivation to choose this one? What other options did you consider? How did you implement this specifically in Python (e.g., a list, set, numpy array, etc)?}
+\begin{comment}
+How do you represent the candidate solutions? What is your motivation to choose this one? What other options did you consider? How did you implement this specifically in Python (e.g., a list, set, numpy array, etc)?
+\end{comment}
+The candidate solutions/ individuals are represented as permutations of the cities. The TSP problem is inherently a permutation problem as every city is visited exactly once. Concretely in Python an individual is represented by a numpy array of integers.
 
 \subsection{Initialization}
 
 \ReplaceMe{How do you initialize the population? How did you determine the number of individuals? Did you implement advanced initialization mechanisms (local search operators, heuristic solutions)? If so, describe them. Do you believe your approach maintains sufficient diversity? How do you ensure that your population enrichment scheme does not immediately take over the population? Did you implement other initialization schemes that did not make it to the final version? Why did you discard them? How did you determine the population size?}
+The first attempt at initializing the population was to generate individuals with random permutations. The population size was chosen based on numerical experiments. \\
+The next attempt was to use greedy heuristic to generate individuals. This consists of starting from a random city and then always choosing the nearest city. To avoid generating the same individual multiple times, the starting city is chosen randomly. This proved to be essential in problems with larger amounts of cities. 
+
 
 \subsection{Selection operators}
 
-\ReplaceMe{Which selection operators did you implement? If they are not from the slides, describe them. Can you motivate why you chose this one? Are there parameters that need to be chosen? Did you use an advanced scheme to vary these parameters throughout the iterations? Did you try other selection operators not included in the final version? Why did you discard them?}
+\begin{comment}
+Which selection operators did you implement? If they are not from the slides, describe them. Can you motivate why you chose this one? Are there parameters that need to be chosen? Did you use an advanced scheme to vary these parameters throughout the iterations? Did you try other selection operators not included in the final version? Why did you discard them?    
+\end{comment}
+
+The selection operator used is k-tournament selection. This selection operator is a very effective one with a good chosen value for k. I didn't try any other operators. The sole parameter that needs to be chosen is k, the size of the tournament. It can be used to help balance the exploration and exploitation of the algorithm and to control the selection pressure.
+
 
 \subsection{Mutation operators}
 
-\ReplaceMe{Which mutation operators did you implement? If they are not from the slides, describe them. How do you choose among several mutation operators? Do you believe it will introduce sufficient randomness? Can that be controlled with parameters? Do you use self-adaptivity? Do you use any other advanced parameter control mechanisms (e.g., variable across iterations)? Did you try other mutation operators not included in the final version? Why did you discard them?}
+\begin{comment}
+    Which mutation operators did you implement? If they are not from the slides, describe them. How do you choose among several mutation operators? Do you believe it will introduce sufficient randomness? Can that be controlled with parameters? Do you use self-adaptivity? Do you use any other advanced parameter control mechanisms (e.g., variable across iterations)? Did you try other mutation operators not included in the final version? Why did you discard them?
+\end{comment}
+I implemented all four mutation operators from the slides: insert,swap,inversion and scramble. 
 
 \subsection{Recombination operators}
 
-\ReplaceMe{Which recombination operators did you implement? If they are not from the slides, describe them. How do you choose among several recombination operators? Why did you choose these ones specifically? Explain how you believe that these operators can produce offspring that combine the best features from their parents. How does your operator behave if there is little overlap between the parents? Can your recombination be controlled with parameters; what behavior do they change? Do you use self-adaptivity? Do you use any other advanced parameter control mechanisms (e.g., variable across iterations)? Did you try other recombination operators not included in the final version? Why did you discard them? Did you consider recombination with arity strictly greater than 2?}
+\ReplaceMe{
+- Which recombination operators did you implement? If they are not from the slides, describe them. 
+- How do you choose among several recombination operators? Why did you choose these ones specifically? Explain how you believe that these operators can produce offspring that combine the best features from their parents. How does your operator behave if there is little overlap between the parents? Can your recombination be controlled with parameters; what behavior do they change? Do you use self-adaptivity? Do you use any other advanced parameter control mechanisms (e.g., variable across iterations)? Did you try other recombination operators not included in the final version? Why did you discard them? Did you consider recombination with arity strictly greater than 2?}
+PMX crossover, edge crossover, order crossover and cycle crossover. 
 
 \subsection{Elimination operators}
 
@@ -137,14 +155,17 @@ This report should be uploaded to Toledo by \deadlineReport. It must be in the \
 \subsection{Diversity promotion mechanisms}
 
 \ReplaceMe{Did you implement a diversity promotion scheme? If yes, which one? If no, why not? Describe the mechanism you implemented. In what sense does the mechanism improve the performance of your evolutionary algorithm? Are there parameters that need to be determined? Did you use an advanced scheme to determine them?}
+I implemented fitness sharing. It is an essential mechanism to promote and maintain diversity in the population. The main aspects that characterise fitness sharing is the chosen distance function and paramaters that determine the size of the applied penalty(alpha and sigma).
 
 \subsection{Stopping criterion}
 
 \ReplaceMe{Which stopping criterion did you implement? Did you combine several criteria?}
+I didn't implement a specific stopping criterion, the time limit of 5 minutes is used to stop the algorithm. During the process of hyperparameter tuning, an extra stopping criterion was added to stop the algorithm if the best objective stayed the same over a number of iterations.(300 should i add it.)
 
 \subsection{Parameter selection}
 
 \ReplaceMe{For all of the parameters that are not automatically determined by adaptivity or self-adaptivity (as you have described above), describe how you determined them. Did you perform a hyperparameter search? How did you do this? How did you determine these parameters would be valid both for small and large problem instances?}
+
 
 \subsection{Other considerations}\label{sec_oth}
 
@@ -203,7 +224,7 @@ Interpret your results. How do you rate the performance of your algorithm (time,
 \ReplaceMe{What are the three main weak points of evolutionary algorithms in your experience?}
 
 \begin{enumerate}
- \item 
+ \item Scalability
  \item 
  \item 
 \end{enumerate}

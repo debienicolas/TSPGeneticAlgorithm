@@ -1,0 +1,49 @@
+# wandb.init()
+    
+    # tourNumber = wandb.config.tour
+    #tour =  f"Data/tour{tourNumber}.csv"
+
+    
+    wandb.init(project="GAEC")
+    wandb.config.recombination = "basic"
+    wandb.config.mutation = "inversion"
+
+    wandb.config.LSO_alpha = 0#2 #0.97
+    wandb.config.LSO_n = 2#4
+    wandb.config.LSO_c = 1
+
+    wandb.config.sharedElimDecay_alpha = 2
+    wandb.config.sharedElimDecay_n = 15
+    wandb.config.sharedElimDecay_c = 00
+
+    wandb.config.lambStart = 100
+    wandb.config.lambEnd = 100
+    wandb.config.lambDecay_n = 1
+
+    wandb.config.alpha_sharing = 2.467
+    wandb.config.sigmaPerc = 0.5
+    wandb.config.percent_greedy_init = 0.1 #0.05
+
+    wandb.config.lamb = wandb.config.lambStart #40
+    wandb.config.mu = 15 #40
+    wandb.config.k = 5
+    wandb.config.alpha = 0.05
+    
+    wandb.config.tour = 50
+    tour =  f"Data/tour{wandb.config.tour}.csv"
+    
+    
+    # profiler = cProfile.Profile()
+    # profiler.enable()
+    # p = Parameters(lamb=15, mu=15,num_iters=1500,k=9,alpha=0.05,alpha_sharing=0.20,sigmaPerc=0.4)
+    p = Parameters(lamb=wandb.config.lambStart, mu=wandb.config.lambStart,num_iters=5000,k=wandb.config.k,alpha=wandb.config.alpha,alpha_sharing=wandb.config.alpha_sharing,sigmaPerc=wandb.config.sigmaPerc)
+    
+    # if p.wandb:
+    #     wandb.init(project="GAEC", config={"lamb": p.lamb, "mu": p.mu, "num_iters": p.num_iters, "k": p.k, "alpha": p.alpha, "tour":tourNumber, "alpha_sharing": p.alpha_sharing, "sigmaPerc": p.sigmaPerc})
+    
+      
+    algo = r0123456(p)
+    best = algo.optimize(tour)
+
+
+no exponential decay or nothing
