@@ -180,6 +180,15 @@ def opt2invert(ind1,i,j):
     new_order[j+1:] = ind1[j+1:]
     return new_order
 
+@njit
+def opt2insert(ind1,i,j):
+    new_order = np.empty_like(ind1)
+    new_order[:i] = ind1[:i]
+    new_order[i:j+1] = ind1[i+1:j+1]
+    new_order[j+1] = ind1[i]
+    new_order[j+2:] = ind1[j+1:]
+    return new_order
+
 @njit 
 def opt2(distM,indv):
     best_indiv = indv
@@ -197,7 +206,38 @@ def opt2(distM,indv):
     return best_indiv
 
 @njit
+def opt2Sample(distM,indv,percent= 0.3):
+    best_indv = indv
+    current_best = fitness(distM,indv)
+    size = indv.size
+    subsample_1 = np.random.choice(size-1,int(percent*size),replace=False)
+    for i in subsample_1:
+        for j in range(i+1,size):
+            lengthDelta = -distM[indv[i],indv[i+1]] - distM[indv[j],indv[(j+1)]] + distM[indv[i+1],indv[j+1]] + distM[indv[i],indv[j]]
+            if lengthDelta < 0:
+                new_order = opt2swap(indv,i,j)
+                new_fitness = fitness(distM,new_order)
+                if new_fitness < current_best:
+                    best_indv = new_order
+                    current_best = new_fitness
+    return best_indv
+
+@njit
 def opt2withInversion(distM,indv):
+    best_indiv = indv
+    current_best = fitness(distM,indv)
+    size = indv.size
+    for i in range(size - 1):
+        for j in range(i+1,size):
+            new_order = opt2invert(indv,i,j)
+            new_fitness = fitness(distM,new_order)
+            if new_fitness < current_best:
+                best_indiv = new_order
+                current_best = new_fitness
+    return best_indiv
+
+@njit
+def opt2withInsertion(distM,indv):
     best_indiv = indv
     current_best = fitness(distM,indv)
     size = indv.size
@@ -205,7 +245,7 @@ def opt2withInversion(distM,indv):
         for j in range(i+1,size):
             lengthDelta = -distM[indv[i],indv[i+1]] - distM[indv[j],indv[(j+1)]] + distM[indv[i+1],indv[j+1]] + distM[indv[i],indv[j]]
             if lengthDelta < 0:
-                new_order = opt2invert(indv,i,j)
+                new_order = opt2insert(indv,i,j)
                 new_fitness = fitness(distM,new_order)
                 if new_fitness < current_best:
                     best_indiv = new_order
@@ -333,16 +373,24 @@ class r0123456:
         self.timings = {}
         self.used_dist_map = 0
     
+    def initializePopulation(self):
+        # create the initial population with random np.permutations
+        population = np.zeros((self.p.lamb, self.length), dtype=int)
+        for i in range(self.p.lamb):
+            population[i] = np.random.permutation(self.length)
+        return population
+    
 
     def convergenceTest(self):
         self.iter += 1
         # same fitness for 300 iterations
-        # if self.iter > 300 and len(set(self.fitnesses[-300:])) == 1:
-        #     return False
+        if self.iter > 300 and len(set(self.fitnesses[-300:])) == 1:
+            return False
         return True
     
     # k-tournament selection
     def selection(self,population):
+
         chosen = population[np.random.choice(self.p.lamb,self.p.k,replace=False)]
         fvals = np.array([fitness(self.distanceMatrix,ind) for ind in chosen])
         return chosen[np.argmin(fvals)]
@@ -651,11 +699,6 @@ class r0123456:
         timePassed = 300 - timeLeft
         lamb_alpha = -math.log(wandb.config.lambEnd/wandb.config.lambStart)
         return int(wandb.config.lambStart*math.exp(-lamb_alpha * ((timePassed/300)**wandb.config.lambDecay_n)))
-    
-    def mutationDecay(self,timeLeft):
-        timePassed = 300 - timeLeft
-        alpha = -math.log(wandb.config.alphaEnd/wandb.config.alphaStart)
-        return wandb.config.alphaStart*math.exp(-alpha * ((timePassed/300)**wandb.config.alphaDecay_n))
 
     # The evolutionary algorithm's main loop
     def optimize(self, filename):
@@ -690,16 +733,13 @@ class r0123456:
     
         while(self.convergenceTest()):
             self.p.mu = self.p.lamb
-            self.p.alpha = self.mutationDecay(self.timeLeft)
 
             
             ### Create offspring population ### 
             start = timer()
             offspring = np.zeros((self.p.mu,self.length), dtype=int)
-            alphas_offspring = np.zeros((self.p.mu),dtype=float)
-            for i in range(self.p.mu):
-                alphas_offspring[i] = max(self.p.alpha, self.p.alpha + 0.1 * np.random.random())
-
+            alphas_offspring = np.full((self.p.mu),max(self.p.alpha, self.p.alpha + 0.2 * np.random.random()))
+            
             for i in range(self.p.mu):
                 p1 = self.selection(population)
                 p2 = self.selection(population)
@@ -709,7 +749,9 @@ class r0123456:
                 self.mutation(offspring[i],alphas_offspring[i])
                 ### apply local search operator to the offspring ###
                 if self.lsogrowth > np.random.random():
-                    offspring[i] = opt2(self.distanceMatrix,offspring[i])
+                    offspring[i] = opt2Sample(self.distanceMatrix,offspring[i],percent=wandb.config.LSOPercent)
+
+                    
                 
             end = timer()
             self.timings["Create offspring + LSO"] = end - start
@@ -720,7 +762,10 @@ class r0123456:
             for i,ind in enumerate(population):
                 self.mutation(ind,alphas[i])
                 if self.lsogrowth > np.random.random():
-                    population[i] = opt2(self.distanceMatrix,ind)
+                    population[i] = opt2Sample(self.distanceMatrix,ind,percent=wandb.config.LSOPercent)
+                
+        
+
             end = timer()
             self.timings["Mutation + LSO"] = end - start
 
@@ -748,7 +793,7 @@ class r0123456:
                           self.timings |
                           {"used dist map": self.used_dist_map} |
                           {"solution": bestSolution.tolist()} |
-                          {"elimdecay": self.elimdecay, "LSOgrowth": self.lsogrowth,"lambDecay":self.p.lamb,"mutationDecay": self.p.alpha} |
+                          {"elimdecay": self.elimdecay, "LSOgrowth": self.lsogrowth,"lambDecay":self.p.lamb} |
                           {"time left": timeLeft,"time": 300-timeLeft} )
 
             if timeLeft < 0:
@@ -811,33 +856,28 @@ if __name__ == "__main__":
     wandb.config.recombination = "basic"
     wandb.config.mutation = "inversion"
 
-    wandb.config.LSO_alpha = 5#2 #0.97
-    wandb.config.LSO_n = 2#4
-    wandb.config.LSO_c = 0
+    wandb.config.LSO_alpha = 2#2 #0.97
+    wandb.config.LSO_n = 1#4
+    wandb.config.LSO_c = 0.3
 
-    wandb.config.sharedElimDecay_alpha = 0.8
+    wandb.config.sharedElimDecay_alpha = 1
     wandb.config.sharedElimDecay_n = 50
-    wandb.config.sharedElimDecay_c = 0
+    wandb.config.sharedElimDecay_c = 00
 
-    wandb.config.lambStart = 120
-    wandb.config.lambEnd = 15
+    wandb.config.lambStart = 100
+    wandb.config.lambEnd = 30
     wandb.config.lambDecay_n = 0.6
 
-    wandb.config.alpha_sharing = 1
-    wandb.config.sigmaPerc = 0.2
+    wandb.config.alpha_sharing = 2.5
+    wandb.config.sigmaPerc = 0.3
     wandb.config.percent_greedy_init = 0.20 #0.05
-    
-    wandb.config.alpha = 0.1
-    wandb.config.alphaStart = 0.5
-    wandb.config.alphaEnd = 0.1
-    wandb.config.alphaDecay_n = 0.4
-
 
     wandb.config.lamb = wandb.config.lambStart #40
     wandb.config.mu = wandb.config.lambStart #40
-    wandb.config.k = 6
+    wandb.config.k = 7
+    wandb.config.alpha = 0.1
 
-    wandb.config.LSOPercent = 1.0
+    wandb.config.LSOPercent = 0.9
     
     wandb.config.tour = 750
     tour =  f"Data/tour{wandb.config.tour}.csv"

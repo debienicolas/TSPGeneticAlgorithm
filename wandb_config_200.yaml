@@ -1,0 +1,48 @@
+program: r0123456.py
+method: bayes
+metric:
+  name: best objective
+  goal: minimize
+parameters:
+
+  k:
+    value: 7
+  alpha:
+    value: 0.1
+
+  alpha_sharing:
+    values: [0.5,1.0,1.5,2.0,2.5,3.0]
+  sigmaPerc:
+    values: [0.1,0.2,0.3,0.4,0.5]
+  
+  sharedElimDecay_alpha:
+    values: [0.4,0.6,0.8,1.0]
+  sharedElimDecay_n:
+    value: 50
+  sharedElimDecay_c:
+    values: [0.0,0.1,0.2,0.3]
+
+  LSO_alpha:
+    values: [1,2,3,4,5]
+  LSO_n:
+    values: [1,2,3,4,5]
+  LSO_c:
+    values: [0.0,0.1,0.2,0.3]
+
+  mutation:
+    value: ["inversion"]
+  recombination:
+    values: ["basic"]
+  percent_greedy_init:
+    value: 0.05
+
+  lambStart:
+    value: 150
+  lambEnd:
+    value: 50
+  lambDecay_n:
+    value: 0.6
+  tour:
+    value: 200
+  
+  
