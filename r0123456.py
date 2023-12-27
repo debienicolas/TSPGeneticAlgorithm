@@ -3,13 +3,10 @@ from asyncio import futures
 import copy
 from hmac import new
 from math import dist
-from operator import mod
+from operator import index, mod
 from turtle import st
-from cv2 import add, exp
 import pandas as pd
 import matplotlib.pyplot as plt
-from regex import D
-from sympy import rem
 import wandb
 import Reporter
 import numpy as np
@@ -23,27 +20,19 @@ import cProfile
 import pstats
 import math
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
+from numba import jit, prange
 
 INF = 1000000000000000
 
-""" Takes as input an individual and returns a standardized individual that starts its permutation with 0."""
+
 @njit
-def standardise(individual):
-    # given a permutation, standardise it, i.e. make it start with 0
-    idx = 0
-    for i in range(len(individual)):
-        if individual[i] == 0:
-            idx = i
-            break
-    return np.roll(individual,-idx)
+def standardise(indv):
+    index = np.where(indv == 0)[0][0]
+    return np.concatenate((indv[index:],indv[:index]))
 
 
 @njit
-def fitness(distanceMatrix,individual):
-
-    # check if the individual is in the fitness map
-    
+def fitness(distanceMatrix,individual):    
 
     # calculate the fitness of the individual
     # the fitness is the total distance of the cycle
@@ -57,18 +46,27 @@ def fitness(distanceMatrix,individual):
         distance += distanceMatrix[i[0],i[1]]
     return distance
 
+# @njit
+# def distance_2(indv1, indv2):
+#     edges1 = np.column_stack((indv1, np.roll(indv1, -1)))
+#     edges2 = np.column_stack((indv2, np.roll(indv2, -1)))
+#     similarity = np.sum(np.logical_and(edges1[:, 0, None] == edges2[:, 0], edges1[:, 1, None] == edges2[:, 1]))
+#     distance = indv1.size - similarity
+#     return distance
+
 @njit
-def distance(indv1,indv2):
-    edges1 = np.column_stack((indv1, np.roll(indv1, -1)))
-    edges2 = np.column_stack((indv2, np.roll(indv2, -1)))
-    #similarity = np.count_nonzero((edges1[:,None] == edges2).all(-1).any(-1))
-    similarity = 0
-    for i in edges1:
-        for j in edges2:
-            if i[0] == j[0] and i[1] == j[1]:
-                similarity += 1
-    distance = indv1.size - similarity
-    return distance
+def distance(ind1,ind2):
+    size = ind1.size
+    succesors = np.empty(size, dtype=np.int32)
+    for i in prange(size):
+        succesors[ind2[i]] = ind2[(i+1)%size]
+    count_nonshared_edges = 0
+    for i in prange(size):
+        j = (i+1)%size
+        if ind1[j] != succesors[ind1[i]]:
+            count_nonshared_edges += 1
+    return count_nonshared_edges
+
 
 @njit
 def initialize_legally(distance_matrix):
@@ -109,7 +107,6 @@ def initialize_greedily(distanceMatrix: np.ndarray):
     while i < length:
         possibilities = set(range(length)) - set([elem for elem in order if elem >= 0])
         possibilities_legal = []
-
         for pos in possibilities:
             distance = distanceMatrix[city][pos]
             if distance < np.inf:
@@ -119,6 +116,32 @@ def initialize_greedily(distanceMatrix: np.ndarray):
         city = min(possibilities_legal, key=lambda x: distanceMatrix[order[i - 1]][x])
         order[i] = city
         i += 1
+    return order
+
+
+def initialize_greedily_k_tournament(distanceMatrix: np.ndarray, k: int):
+    length = distanceMatrix.shape[0]
+    order = -np.ones(length, dtype=int)
+    city = np.random.randint(0, length)
+    order[0] = city
+    i = 1
+
+    while i < length:
+        possibilities = set(range(length)) - set(order[order >= 0])
+        
+        if len(possibilities) < k:
+            k = len(possibilities)  # Reduce k if fewer possibilities are left
+
+        if not possibilities:
+            break
+
+        # Perform k-tournament selection
+        tournament_cities = np.random.choice(list(possibilities), k, replace=False)
+        city = min(tournament_cities, key=lambda x: distanceMatrix[order[i - 1]][x])
+
+        order[i] = city
+        i += 1
+
     return order
 
 
@@ -180,17 +203,17 @@ def opt2invert(ind1,i,j):
     new_order[j+1:] = ind1[j+1:]
     return new_order
 
-@njit 
-def opt2(distM,indv):
-    best_indiv = indv
-    current_best = fitness(distM,indv)
+@jit
+def opt2(distM, indv):
     size = indv.size
-    for i in range(size - 1):
-        for j in range(i+1,size):
-            lengthDelta = -distM[indv[i],indv[i+1]] - distM[indv[j],indv[(j+1)]] + distM[indv[i+1],indv[j+1]] + distM[indv[i],indv[j]]
+    best_indiv = indv
+    current_best = fitness(distM, indv)
+    for i in prange(size - 1):
+        for j in prange(i + 1, size):
+            lengthDelta = -distM[indv[i], indv[i + 1]] - distM[indv[j], indv[(j + 1)]] + distM[indv[i + 1], indv[j + 1]] + distM[indv[i], indv[j]]
             if lengthDelta < 0:
-                new_order = opt2swap(indv,i,j)
-                new_fitness = fitness(distM,new_order)
+                new_order = opt2swap(indv, i, j)
+                new_fitness = fitness(distM, new_order)
                 if new_fitness < current_best:
                     best_indiv = new_order
                     current_best = new_fitness
@@ -374,13 +397,6 @@ class r0123456:
     
 
     def recombination(self,parent1,parent2):
-        # if self.timeLeft < 150:
-        #     if self.iter%4 == 0:
-        #         return self.edgeCrossover(parent1,parent2)
-        #         ind1,_ = self.edgeCrossover(parent1,parent2)
-        #         return ind1
-        #     else:
-        #         return basicrossover(parent1,parent2,np.zeros(parent1.size,dtype=int)
         if self.p.wandb:
             if wandb.config.recombination == "order":
                 return orderCrossover(parent1,parent2,np.zeros(parent1.size,dtype=int))
@@ -397,16 +413,6 @@ class r0123456:
                     return idv1
                 else:
                     return idv2
-                
-        else:
-            idv1,idv2 = self.cycle_crossover(parent1,parent2)
-                # return the best of the two offspring
-            fit1 = fitness(self.distanceMatrix,idv1)
-            fit2 = fitness(self.distanceMatrix,idv2)
-            if fit1 < fit2:
-                return idv1
-            else:
-                return idv2
     
     def basicrossover(self,indv1, indv2):
         solution = np.zeros(indv1.size, dtype=int)
@@ -551,9 +557,7 @@ class r0123456:
         return best_indiv
         
 
-    def sharedFitnessWrapper(self,orig_fitnesses, X, pop=None, betaInit = 0):
-        if pop is None:
-            return np.array([fitness(self.distanceMatrix,x) for x in X])
+    def sharedFitnessWrapper(self,orig_fitnesses, X, pop, betaInit = 0):
         
         modFitnesses = np.zeros(X.shape[0])
 
@@ -566,22 +570,23 @@ class r0123456:
             sigma = self.p.sigmaPerc * max_distance
 
         for i,x in enumerate(X):
+            if orig_fitnesses[i] == np.inf:
+                modFitnesses[i] = np.inf
+                continue
             distances = np.zeros(pop.shape[0])
             for j,y in enumerate(pop):
-                key = (hash(standardise(x).tobytes()),hash(standardise(y).tobytes()))
-                dist1 = self.distanceMap.get(key,None)
-                if dist1 is not None:
-                    distances[j] = dist1
-                    continue
-                key = (hash(standardise(y).tobytes()),hash(standardise(x).tobytes()))
-                dist2 = self.distanceMap.get(key,None)
-                if dist2 is not None:
-                    distances[j] = dist2
-                    continue
-                else:
-                    dist = distance(x,y)
-                    key = (hash(standardise(x).tobytes()),hash(standardise(y).tobytes()))
-                    self.distanceMap[key] = dist
+                # key1 = (standardise(x).tobytes(),standardise(y).tobytes())
+                # if key1 in self.distanceMap:
+                #     distances[j] = self.distanceMap[key1]
+                #     continue
+                # key2 = (standardise(y).tobytes(),standardise(x).tobytes())
+                # if key2 is self.distanceMap.get(key2,None):
+                #     distances[j] = self.distanceMap[key2]
+                #     continue
+                # else:
+                    distances[j] = distance(x,y)
+                    #dist = distance(x,y)
+                    # self.distanceMap[key1] = dist
             
             onePlusBeta = betaInit
             within_sigma = distances <= sigma
@@ -589,42 +594,28 @@ class r0123456:
             # add to fitness hashmap
             fitnessval = orig_fitnesses[i]
                 
-            if fitnessval == np.inf:
-                modFitnesses[i] = np.inf
-            else:
-                modFitnesses[i] = fitnessval *onePlusBeta** np.sign(fitnessval)
+            modFitnesses[i] = fitnessval *onePlusBeta** np.sign(fitnessval)
         
         return modFitnesses
 
     def sharedElimination(self, population, offspring):
         combined = np.concatenate((population,offspring), axis=0)
         survivors = np.zeros((self.p.lamb,self.length),dtype=int)
-        fitnesses = np.array([fitness(self.distanceMatrix,ind) for ind in combined])
+        fitnesses = np.array([self.fitnessMap.get(hash(standardise(ind).tobytes()),fitness(self.distanceMatrix,ind)) for ind in combined])
         for i in range(self.p.lamb):
-            #print("survivor chosen: ", i)
             if i == 0:
-                best_idx = np.argmin(np.array([fitness(self.distanceMatrix,ind) for ind in combined]))
+                best_idx = np.argmin(fitnesses)
                 survivors[i] = combined[best_idx]
                 np.delete(combined,best_idx,0)
             else :
                 # instead of calculating the updated fitness for all, only do it for the top 50% of the population ? 
                 # take random subset of the combined population
-                fvals = self.sharedFitnessWrapper(fitnesses,combined, survivors[0:i,:],betaInit=1)
-                idx = np.argmin(fvals)
+                fpen = self.sharedFitnessWrapper(fitnesses,combined, survivors[0:i,:],betaInit=1)
+                idx = np.argmin(fpen)
                 survivors[i] = combined[idx]
                 np.delete(combined,idx,0)
+        
         return survivors
-    
-    # def sharedElimination_k(self,population,offspring,k_elim):
-    #     combined = np.concatenate((population,offspring), axis=0)
-    #     fitnesses = np.empty((len(combined)))
-    #     for i, ind in enumerate(combined):
-    #         fitnesses[i] = self.fitnessMap.get(hash(standardise(ind).tobytes()),fitness(self.distanceMatrix,ind))
-    #     survivors = np.zeros((self.p.lamb,self.length),dtype=int)
-    #     best_indx = np.argmin(fitnesses)        
-    #     survivors[0] = combined[best_indx]
-    #     for i in range(self.p.lamb-1):
-    #         fvals = self.sharedFitnessWrapper
 
 
 	# mu , lambda elimination
@@ -709,8 +700,7 @@ class r0123456:
                 self.mutation(offspring[i],alphas_offspring[i])
                 ### apply local search operator to the offspring ###
                 if self.lsogrowth > np.random.random():
-                    offspring[i] = opt2(self.distanceMatrix,offspring[i])
-                
+                    offspring[i] = randomOpt2(self.distanceMatrix,offspring[i],percentage=wandb.config.LSOPercent)
             end = timer()
             self.timings["Create offspring + LSO"] = end - start
 
@@ -720,7 +710,7 @@ class r0123456:
             for i,ind in enumerate(population):
                 self.mutation(ind,alphas[i])
                 if self.lsogrowth > np.random.random():
-                    population[i] = opt2(self.distanceMatrix,ind)
+                    population[i] = randomOpt2(self.distanceMatrix,ind,percentage=wandb.config.LSOPercent)
             end = timer()
             self.timings["Mutation + LSO"] = end - start
 
@@ -732,7 +722,17 @@ class r0123456:
                 population = self.elimination(population,offspring)
             self.timings["Elimination"] = timer() - start
 
-            fitnesses = np.array([fitness(self.distanceMatrix,i) for i in population])
+            # calculate fintesses
+            fitnesses = np.zeros((self.p.lamb))
+            for i in range(self.p.lamb):
+                key = hash(standardise(population[i]).tobytes())
+                fitn = self.fitnessMap.get(key,None)
+                if fitn is None:
+                    fitn = fitness(self.distanceMatrix,population[i])
+                    self.fitnessMap[key] = fitn
+                fitnesses[i] = fitn
+
+
             
             meanObjective = np.mean(fitnesses)
             bestObjective = np.min(fitnesses)
@@ -749,7 +749,8 @@ class r0123456:
                           {"used dist map": self.used_dist_map} |
                           {"solution": bestSolution.tolist()} |
                           {"elimdecay": self.elimdecay, "LSOgrowth": self.lsogrowth,"lambDecay":self.p.lamb,"mutationDecay": self.p.alpha} |
-                          {"time left": timeLeft,"time": 300-timeLeft} )
+                          {"time left": timeLeft,"time": 300-timeLeft} |
+                          {"distance map size": len(self.distanceMap),"fitness map size":len(self.fitnessMap)} )
 
             if timeLeft < 0:
                 break
@@ -802,44 +803,44 @@ class Parameters:
 if __name__ == "__main__":
 
     
-    #wandb.init()
-    # tourNumber = wandb.config.tour
-    #tour =  f"Data/tour{tourNumber}.csv"
+    wandb.init()
+    # # tourNumber = wandb.config.tour
+    # #tour =  f"Data/tour{tourNumber}.csv"
 
     
-    wandb.init(project="GAEC")
-    wandb.config.recombination = "basic"
-    wandb.config.mutation = "inversion"
+    # wandb.init(project="GAEC")
+    # wandb.config.recombination = "basic"
+    # wandb.config.mutation = "inversion"
 
-    wandb.config.LSO_alpha = 5#2 #0.97
-    wandb.config.LSO_n = 2#4
-    wandb.config.LSO_c = 0
+    # wandb.config.LSO_alpha = 5#2 #0.97
+    # wandb.config.LSO_n = 2#4
+    # wandb.config.LSO_c = 0
 
-    wandb.config.sharedElimDecay_alpha = 0.8
-    wandb.config.sharedElimDecay_n = 50
-    wandb.config.sharedElimDecay_c = 0
+    # wandb.config.sharedElimDecay_alpha = 0.8
+    # wandb.config.sharedElimDecay_n = 50
+    # wandb.config.sharedElimDecay_c = 0
 
-    wandb.config.lambStart = 120
-    wandb.config.lambEnd = 15
-    wandb.config.lambDecay_n = 0.6
+    # wandb.config.lambStart = 150
+    # wandb.config.lambEnd = 50
+    # wandb.config.lambDecay_n = 0.6
 
-    wandb.config.alpha_sharing = 1
-    wandb.config.sigmaPerc = 0.2
-    wandb.config.percent_greedy_init = 0.20 #0.05
+    # wandb.config.alpha_sharing = 2.5
+    # wandb.config.sigmaPerc = 0.3
+    # wandb.config.percent_greedy_init = 0.05 #0.05
     
-    wandb.config.alpha = 0.1
-    wandb.config.alphaStart = 0.5
-    wandb.config.alphaEnd = 0.1
-    wandb.config.alphaDecay_n = 0.4
+    # wandb.config.alpha = 0.1
+    # wandb.config.alphaStart = 0.5
+    # wandb.config.alphaEnd = 0.1
+    # wandb.config.alphaDecay_n = 0.4
 
 
-    wandb.config.lamb = wandb.config.lambStart #40
-    wandb.config.mu = wandb.config.lambStart #40
-    wandb.config.k = 6
+    # wandb.config.lamb = wandb.config.lambStart #40
+    # wandb.config.mu = wandb.config.lambStart #40
+    # wandb.config.k = 6
 
-    wandb.config.LSOPercent = 1.0
+    # wandb.config.LSOPercent = 0.9
     
-    wandb.config.tour = 750
+    # wandb.config.tour = 200
     tour =  f"Data/tour{wandb.config.tour}.csv"
     
     
