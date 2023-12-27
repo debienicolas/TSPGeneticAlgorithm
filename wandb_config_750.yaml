@@ -27,9 +27,9 @@ parameters:
   LSO_n:
     value: 5
   LSO_c:
-    value: 0.2
+    values: [0.0,0.1,0.2,0.3]
   LSOPercent:
-    value: 0.95
+    values: [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]
 
   alpha:
     value: 0.1
