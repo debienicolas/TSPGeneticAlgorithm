@@ -3,13 +3,12 @@ from asyncio import futures
 import copy
 from hmac import new
 from math import dist
-from operator import mod
+from operator import index, mod
+from re import sub
+from token import OP
 from turtle import st
-from cv2 import add, exp
 import pandas as pd
 import matplotlib.pyplot as plt
-from regex import D
-from sympy import rem
 import wandb
 import Reporter
 import numpy as np
@@ -23,27 +22,19 @@ import cProfile
 import pstats
 import math
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
+from numba import jit, prange
 
 INF = 1000000000000000
 
-""" Takes as input an individual and returns a standardized individual that starts its permutation with 0."""
+
 @njit
-def standardise(individual):
-    # given a permutation, standardise it, i.e. make it start with 0
-    idx = 0
-    for i in range(len(individual)):
-        if individual[i] == 0:
-            idx = i
-            break
-    return np.roll(individual,-idx)
+def standardise(indv):
+    index = np.where(indv == 0)[0][0]
+    return np.concatenate((indv[index:],indv[:index]))
 
 
 @njit
-def fitness(distanceMatrix,individual):
-
-    # check if the individual is in the fitness map
-    
+def fitness(distanceMatrix,individual):    
 
     # calculate the fitness of the individual
     # the fitness is the total distance of the cycle
@@ -52,25 +43,35 @@ def fitness(distanceMatrix,individual):
     # return np.sum(distanceMatrix[indices[:,0],indices[:,1]])
     distance = 0
     for i in indices:
-        if distanceMatrix[i[0],i[1]] >= INF:
-            return np.inf
-        distance += distanceMatrix[i[0],i[1]]
+        if np.isinf(distanceMatrix[i[0],i[1]]):
+            distance += INF
+        else:
+            distance += distanceMatrix[i[0],i[1]]
     return distance
 
-@njit
-def distance(indv1,indv2):
-    edges1 = np.column_stack((indv1, np.roll(indv1, -1)))
-    edges2 = np.column_stack((indv2, np.roll(indv2, -1)))
-    #similarity = np.count_nonzero((edges1[:,None] == edges2).all(-1).any(-1))
-    similarity = 0
-    for i in edges1:
-        for j in edges2:
-            if i[0] == j[0] and i[1] == j[1]:
-                similarity += 1
-    distance = indv1.size - similarity
-    return distance
+# @njit
+# def distance_2(indv1, indv2):
+#     edges1 = np.column_stack((indv1, np.roll(indv1, -1)))
+#     edges2 = np.column_stack((indv2, np.roll(indv2, -1)))
+#     similarity = np.sum(np.logical_and(edges1[:, 0, None] == edges2[:, 0], edges1[:, 1, None] == edges2[:, 1]))
+#     distance = indv1.size - similarity
+#     return distance
 
 @njit
+def distance(ind1,ind2):
+    size = ind1.size
+    succesors = np.empty(size, dtype=np.int32)
+    for i in prange(size):
+        succesors[ind2[i]] = ind2[(i+1)%size]
+    count_nonshared_edges = 0
+    for i in prange(size):
+        j = (i+1)%size
+        if ind1[j] != succesors[ind1[i]]:
+            count_nonshared_edges += 1
+    return count_nonshared_edges
+
+
+
 def initialize_legally(distance_matrix):
     num_cities = distance_matrix.shape[0]
     permutation = np.empty(num_cities, dtype=np.int64)
@@ -109,7 +110,6 @@ def initialize_greedily(distanceMatrix: np.ndarray):
     while i < length:
         possibilities = set(range(length)) - set([elem for elem in order if elem >= 0])
         possibilities_legal = []
-
         for pos in possibilities:
             distance = distanceMatrix[city][pos]
             if distance < np.inf:
@@ -119,6 +119,32 @@ def initialize_greedily(distanceMatrix: np.ndarray):
         city = min(possibilities_legal, key=lambda x: distanceMatrix[order[i - 1]][x])
         order[i] = city
         i += 1
+    return order
+
+
+def initialize_greedily_k_tournament(distanceMatrix: np.ndarray, k: int):
+    length = distanceMatrix.shape[0]
+    order = -np.ones(length, dtype=int)
+    city = np.random.randint(0, length)
+    order[0] = city
+    i = 1
+
+    while i < length:
+        possibilities = set(range(length)) - set(order[order >= 0])
+        
+        if len(possibilities) < k:
+            k = len(possibilities)  # Reduce k if fewer possibilities are left
+
+        if not possibilities:
+            break
+
+        # Perform k-tournament selection
+        tournament_cities = np.random.choice(list(possibilities), k, replace=False)
+        city = min(tournament_cities, key=lambda x: distanceMatrix[order[i - 1]][x])
+
+        order[i] = city
+        i += 1
+
     return order
 
 
@@ -132,43 +158,15 @@ def initializePopulation(distanceMatrix, lamb, percent_greedy=0.1):
     for i in range(greedy):
         population[i + random_legal] = initialize_greedily(distanceMatrix)
     return population
-    
-
-def nearest_neighbor(dist_matrix, lamb, k):
-    n = len(dist_matrix)
-    population = np.zeros((lamb, n),dtype=int)
-
-    k = int(lamb*k)
-
-    for i in range(k):
-        start = np.random.randint(0,n)
-        tour = [start]
-        visited = set([start])
-        while len(tour) < n:
-            last =  tour[-1]
-            next_city = None
-            min_dist = INF
-
-            for j in range(n):
-                if j not in visited and 0 < dist_matrix[last,j] < min_dist:
-                    next_city = j
-                    min_dist = dist_matrix[last,j]
-            tour.append(next_city)
-            visited.add(next_city)
-
-        population[i] = np.array(tour)
-    for i in range(k,lamb):
-        population[i] = np.random.permutation(n)
-    return population
 
 @njit
-def opt2swap(indv1, i,j):
+def opt2swap(indv1, i, j):
     new_order = np.empty_like(indv1)
-    # take route[0] to route[i] and add them in order to new_route
-    new_order[:i+1] = indv1[:i+1]
-    # take route[i+1] to route[j] and add them in reverse order to new_route
-    new_order[i+1:j+1] = indv1[j:i:-1]
-    # take route[j+1] to end and add them in order to new_route
+    # take route[0] to route[i] and add them in order to new_order
+    new_order[:i] = indv1[:i]
+    # take route[i] to route[j] and add them in reverse order to new_order
+    new_order[i:j+1] = indv1[j:i-1:-1]
+    # take route[j+1] to end and add them in order to new_order
     new_order[j+1:] = indv1[j+1:]
     return new_order
 
@@ -180,47 +178,7 @@ def opt2invert(ind1,i,j):
     new_order[j+1:] = ind1[j+1:]
     return new_order
 
-@njit
-def opt2insert(ind1,i,j):
-    new_order = np.empty_like(ind1)
-    new_order[:i] = ind1[:i]
-    new_order[i:j+1] = ind1[i+1:j+1]
-    new_order[j+1] = ind1[i]
-    new_order[j+2:] = ind1[j+1:]
-    return new_order
 
-@njit 
-def opt2(distM,indv):
-    best_indiv = indv
-    current_best = fitness(distM,indv)
-    size = indv.size
-    for i in range(size - 1):
-        for j in range(i+1,size):
-            lengthDelta = -distM[indv[i],indv[i+1]] - distM[indv[j],indv[(j+1)]] + distM[indv[i+1],indv[j+1]] + distM[indv[i],indv[j]]
-            if lengthDelta < 0:
-                new_order = opt2swap(indv,i,j)
-                new_fitness = fitness(distM,new_order)
-                if new_fitness < current_best:
-                    best_indiv = new_order
-                    current_best = new_fitness
-    return best_indiv
-
-@njit
-def opt2Sample(distM,indv,percent= 0.3):
-    best_indv = indv
-    current_best = fitness(distM,indv)
-    size = indv.size
-    subsample_1 = np.random.choice(size-1,int(percent*size),replace=False)
-    for i in subsample_1:
-        for j in range(i+1,size):
-            lengthDelta = -distM[indv[i],indv[i+1]] - distM[indv[j],indv[(j+1)]] + distM[indv[i+1],indv[j+1]] + distM[indv[i],indv[j]]
-            if lengthDelta < 0:
-                new_order = opt2swap(indv,i,j)
-                new_fitness = fitness(distM,new_order)
-                if new_fitness < current_best:
-                    best_indv = new_order
-                    current_best = new_fitness
-    return best_indv
 
 @njit
 def opt2withInversion(distM,indv):
@@ -229,45 +187,86 @@ def opt2withInversion(distM,indv):
     size = indv.size
     for i in range(size - 1):
         for j in range(i+1,size):
-            new_order = opt2invert(indv,i,j)
-            new_fitness = fitness(distM,new_order)
-            if new_fitness < current_best:
-                best_indiv = new_order
-                current_best = new_fitness
-    return best_indiv
-
-@njit
-def opt2withInsertion(distM,indv):
-    best_indiv = indv
-    current_best = fitness(distM,indv)
-    size = indv.size
-    for i in range(size - 1):
-        for j in range(i+1,size):
             lengthDelta = -distM[indv[i],indv[i+1]] - distM[indv[j],indv[(j+1)]] + distM[indv[i+1],indv[j+1]] + distM[indv[i],indv[j]]
             if lengthDelta < 0:
-                new_order = opt2insert(indv,i,j)
+                new_order = opt2invert(indv,i,j)
                 new_fitness = fitness(distM,new_order)
                 if new_fitness < current_best:
                     best_indiv = new_order
                     current_best = new_fitness
     return best_indiv
 
+@njit 
+def singleFitness(distanceMatric,i,j):
+    distance = distanceMatric[i,j]
+    if distance == np.inf:
+        return INF
+    return distance
+@njit
+def acc_fitness(distM,indv):
+    size = len(indv)
+    acc = np.empty(size+1,dtype=float)
+    acc[0] = 0
+    for i in range(size-1):
+        a1 = indv[i]
+        a2 = indv[i+1]
+        dist = singleFitness(distM,a1,a2)
+        acc[i+1] = acc[i] + dist
+    acc[size] = acc[size-1] + singleFitness(distM,indv[size-1],indv[0])
+    return acc
 
 @njit
+def calc_two_opt_fit(dm ,route, pd: np.ndarray, rd: np.ndarray, i:int, j: int) -> float:
+    orig = pd[-1]
+    #assert pd[-1] == fitness(dm,route)
+    
+    # deleted arcs distances
+    t1 = dm[route[i-1]][route[i]]
+    t2 = dm[route[j]][route[j+1]]
+    # added arcs distances
+    t3 = dm[route[i-1]][route[j]]
+    t4 = dm[route[i]][route[j+1]]
+
+    after = orig - t1 - t2 + t3 + t4
+    pd_del = pd[j] - pd[i]
+    n = len(route)
+    rd_add = rd[n - 1 - i] - rd[n - 1 - j]
+    after = after - pd_del + rd_add
+    return after
+
+
 def randomOpt2(distM,indv, percentage=0.9):
-    best_indiv = indv
-    current_best = fitness(distM,indv)
+    best_fitness = fitness(distM,indv)
+    best_indv = indv
     size = indv.size
-    subsample = np.random.choice(size-1,int(percentage*size),replace=False)
+    # subsample from 1 to size-2
+    subsample = np.random.choice(size-3,int(percentage*size),replace=False)
+    subsample += 1
+    pd = acc_fitness(distM,indv)
+    rd = acc_fitness(distM,indv[::-1])
     for i in subsample:
-        for j in range(i+1,size):
-            lengthDelta = -distM[indv[i],indv[i+1]] - distM[indv[j],indv[(j+1)]] + distM[indv[i+1],indv[j+1]] + distM[indv[i],indv[j]]
-            if lengthDelta < 0:
-                new_order = opt2swap(indv,i,j)
-                new_fitness = fitness(distM,new_order)
-                if new_fitness < current_best:
-                    best_indiv = new_order
-                    current_best = new_fitness
+        for j in range(i+1,size-1):
+            new_fitness = calc_two_opt_fit(distM,indv,pd,rd,i,j)
+            if new_fitness < best_fitness and not np.isinf(new_fitness) and new_fitness < INF:
+                best_indv = opt2swap(indv,i,j)
+                best_fitness = fitness(distM,best_indv)
+
+    return best_indv
+
+@njit
+def opt2(distM, indv):
+    size = indv.size
+    best_indiv = indv
+    current_best = fitness(distM, indv)
+    pd = acc_fitness(distM,indv)
+    rd = acc_fitness(distM,indv[::-1])
+    for i in prange(1,size - 2):
+        for j in prange(i + 1, size-1):
+            new_fitness = calc_two_opt_fit(distM,indv,pd,rd,i,j)
+            if new_fitness < current_best and not np.isinf(new_fitness) and new_fitness < INF:
+                best_indiv = opt2swap(indv, i, j)
+                current_best = fitness(distM, best_indiv)
+
     return best_indiv
 
 
@@ -362,6 +361,42 @@ def basicrossover(indv1, indv2,offspring):
                     candidate = find_alternate_candidate(indv1,indv2,candidate)
                 offspring[i] = candidate
         return offspring
+@njit
+def select_next_city(current_city, parent1, parent2, visited ,distance_matrix):
+    idx_p1 = np.where(parent1 == current_city)[0][0]
+    idx_p2 = np.where(parent2 == current_city)[0][0]
+
+    next_city_p1 = parent1[(idx_p1 + 1) % len(parent1)]
+    next_city_p2 = parent2[(idx_p2 + 1) % len(parent2)]
+
+    if visited[next_city_p1] and visited[next_city_p2]:
+        # Both are visited, choose the a random unvisited city
+        unvisited = np.where(visited == False)[0]
+        return np.random.choice(unvisited)
+    elif visited[next_city_p1]:
+        return next_city_p2
+    elif visited[next_city_p2]:
+        return next_city_p1
+    else:
+        # Neither are visited, choose the closest
+        if distance_matrix[current_city, next_city_p1] < distance_matrix[current_city, next_city_p2]:
+            return next_city_p1
+        else:
+            return next_city_p2
+
+@njit
+def scx(parent1, parent2,offspring,visited_cities,distance_matrix):
+    current_city = np.random.choice(parent1)  
+
+    offspring[0] = current_city
+    visited_cities[current_city] = True
+
+    for i in range(1,len(parent1)):
+        next_city = select_next_city(current_city, parent1, parent2,visited_cities,distance_matrix)
+        visited_cities[next_city] = True
+        offspring[i] = next_city
+
+    return offspring
 
 
 class r0123456:
@@ -373,35 +408,27 @@ class r0123456:
         self.timings = {}
         self.used_dist_map = 0
     
-    def initializePopulation(self):
-        # create the initial population with random np.permutations
-        population = np.zeros((self.p.lamb, self.length), dtype=int)
-        for i in range(self.p.lamb):
-            population[i] = np.random.permutation(self.length)
-        return population
-    
 
     def convergenceTest(self):
         self.iter += 1
         # same fitness for 300 iterations
-        if self.iter > 300 and len(set(self.fitnesses[-300:])) == 1:
-            return False
+        # if self.iter > 300 and len(set(self.fitnesses[-300:])) == 1:
+        #     return False
         return True
     
     # k-tournament selection
     def selection(self,population):
-
         chosen = population[np.random.choice(self.p.lamb,self.p.k,replace=False)]
         fvals = np.array([fitness(self.distanceMatrix,ind) for ind in chosen])
         return chosen[np.argmin(fvals)]
     
     # k-tournament selection with fitness sharing
-    def SharingSelection(self,population,p1):
-        chosen_indices = np.random.choice(self.p.lamb,self.p.k,replace=False)
-        chosen = population[chosen_indices]
-        modifiedFitnesses = self.sharedFitnessWrapper(chosen, p1)
-        best_index = chosen_indices[np.argmin(modifiedFitnesses)]
-        return population[best_index]
+    # def SharingSelection(self,population,p1):
+    #     chosen_indices = np.random.choice(self.p.lamb,self.p.k,replace=False)
+    #     chosen = population[chosen_indices]
+    #     modifiedFitnesses = self.sharedFitnessWrapper(chosen, p1)
+    #     best_index = chosen_indices[np.argmin(modifiedFitnesses)]
+    #     return population[best_index]
 
     
     # Mutation wrapper function
@@ -422,13 +449,7 @@ class r0123456:
     
 
     def recombination(self,parent1,parent2):
-        # if self.timeLeft < 150:
-        #     if self.iter%4 == 0:
-        #         return self.edgeCrossover(parent1,parent2)
-        #         ind1,_ = self.edgeCrossover(parent1,parent2)
-        #         return ind1
-        #     else:
-        #         return basicrossover(parent1,parent2,np.zeros(parent1.size,dtype=int)
+        
         if self.p.wandb:
             if wandb.config.recombination == "order":
                 return orderCrossover(parent1,parent2,np.zeros(parent1.size,dtype=int))
@@ -445,16 +466,8 @@ class r0123456:
                     return idv1
                 else:
                     return idv2
-                
-        else:
-            idv1,idv2 = self.cycle_crossover(parent1,parent2)
-                # return the best of the two offspring
-            fit1 = fitness(self.distanceMatrix,idv1)
-            fit2 = fitness(self.distanceMatrix,idv2)
-            if fit1 < fit2:
-                return idv1
-            else:
-                return idv2
+            elif wandb.config.recombination == "scx":
+                return scx(parent1,parent2,np.zeros(parent1.size,dtype=int),np.zeros(parent1.size,dtype=bool),self.distanceMatrix)
     
     def basicrossover(self,indv1, indv2):
         solution = np.zeros(indv1.size, dtype=int)
@@ -599,9 +612,7 @@ class r0123456:
         return best_indiv
         
 
-    def sharedFitnessWrapper(self,orig_fitnesses, X, pop=None, betaInit = 0):
-        if pop is None:
-            return np.array([fitness(self.distanceMatrix,x) for x in X])
+    def sharedFitnessWrapper(self,orig_fitnesses, X, pop, betaInit = 1):
         
         modFitnesses = np.zeros(X.shape[0])
 
@@ -614,33 +625,19 @@ class r0123456:
             sigma = self.p.sigmaPerc * max_distance
 
         for i,x in enumerate(X):
+            if orig_fitnesses[i] == np.inf:
+                modFitnesses[i] = np.inf
+                continue
             distances = np.zeros(pop.shape[0])
             for j,y in enumerate(pop):
-                key = (hash(standardise(x).tobytes()),hash(standardise(y).tobytes()))
-                dist1 = self.distanceMap.get(key,None)
-                if dist1 is not None:
-                    distances[j] = dist1
-                    continue
-                key = (hash(standardise(y).tobytes()),hash(standardise(x).tobytes()))
-                dist2 = self.distanceMap.get(key,None)
-                if dist2 is not None:
-                    distances[j] = dist2
-                    continue
-                else:
-                    dist = distance(x,y)
-                    key = (hash(standardise(x).tobytes()),hash(standardise(y).tobytes()))
-                    self.distanceMap[key] = dist
-            
+                    distances[j] = distance(x,y)
             onePlusBeta = betaInit
             within_sigma = distances <= sigma
             onePlusBeta = betaInit + np.sum(1 - (distances[within_sigma] / sigma) ** alpha)
             # add to fitness hashmap
             fitnessval = orig_fitnesses[i]
                 
-            if fitnessval == np.inf:
-                modFitnesses[i] = np.inf
-            else:
-                modFitnesses[i] = fitnessval *onePlusBeta** np.sign(fitnessval)
+            modFitnesses[i] = fitnessval *onePlusBeta** np.sign(fitnessval)
         
         return modFitnesses
 
@@ -649,30 +646,30 @@ class r0123456:
         survivors = np.zeros((self.p.lamb,self.length),dtype=int)
         fitnesses = np.array([fitness(self.distanceMatrix,ind) for ind in combined])
         for i in range(self.p.lamb):
-            #print("survivor chosen: ", i)
             if i == 0:
-                best_idx = np.argmin(np.array([fitness(self.distanceMatrix,ind) for ind in combined]))
+                best_idx = np.argmin(fitnesses)
                 survivors[i] = combined[best_idx]
                 np.delete(combined,best_idx,0)
             else :
                 # instead of calculating the updated fitness for all, only do it for the top 50% of the population ? 
                 # take random subset of the combined population
-                fvals = self.sharedFitnessWrapper(fitnesses,combined, survivors[0:i,:],betaInit=1)
-                idx = np.argmin(fvals)
+                fpen = self.sharedFitnessWrapper(fitnesses,combined, survivors[0:i,:],betaInit=1)
+                # k-tournament selection, choose random k individuals and take the best one
+                chosenidx = np.random.choice(fpen.shape[0],self.p.k,replace=False)
+                current_best = np.inf
+                current_best_idx = None
+                for idx in chosenidx:
+                    if fpen[idx] < current_best:
+                        current_best = fpen[idx]
+                        current_best_idx = idx
+                
+
+                #idx = np.argmin(fpen)
+                idx = current_best_idx
                 survivors[i] = combined[idx]
                 np.delete(combined,idx,0)
+        
         return survivors
-    
-    # def sharedElimination_k(self,population,offspring,k_elim):
-    #     combined = np.concatenate((population,offspring), axis=0)
-    #     fitnesses = np.empty((len(combined)))
-    #     for i, ind in enumerate(combined):
-    #         fitnesses[i] = self.fitnessMap.get(hash(standardise(ind).tobytes()),fitness(self.distanceMatrix,ind))
-    #     survivors = np.zeros((self.p.lamb,self.length),dtype=int)
-    #     best_indx = np.argmin(fitnesses)        
-    #     survivors[0] = combined[best_indx]
-    #     for i in range(self.p.lamb-1):
-    #         fvals = self.sharedFitnessWrapper
 
 
 	# mu , lambda elimination
@@ -699,6 +696,11 @@ class r0123456:
         timePassed = 300 - timeLeft
         lamb_alpha = -math.log(wandb.config.lambEnd/wandb.config.lambStart)
         return int(wandb.config.lambStart*math.exp(-lamb_alpha * ((timePassed/300)**wandb.config.lambDecay_n)))
+    
+    def mutationDecay(self,timeLeft):
+        timePassed = 300 - timeLeft
+        alpha = -math.log(wandb.config.alphaEnd/wandb.config.alphaStart)
+        return wandb.config.alphaStart*math.exp(-alpha * ((timePassed/300)**wandb.config.alphaDecay_n))
 
     # The evolutionary algorithm's main loop
     def optimize(self, filename):
@@ -729,17 +731,19 @@ class r0123456:
         self.lsogrowth = self.LSOGrowth(300)
         self.fitnesses = []
         self.timeLeft = 300
-            
+        
+        bestSolution = np.empty((self.length),dtype=int)
     
         while(self.convergenceTest()):
-            self.p.mu = self.p.lamb
-
+            
             
             ### Create offspring population ### 
             start = timer()
             offspring = np.zeros((self.p.mu,self.length), dtype=int)
-            alphas_offspring = np.full((self.p.mu),max(self.p.alpha, self.p.alpha + 0.2 * np.random.random()))
-            
+            alphas_offspring = np.zeros((self.p.mu),dtype=float)
+            for i in range(self.p.mu):
+                alphas_offspring[i] = max(self.p.alpha, self.p.alpha + 0.1 * np.random.random())
+
             for i in range(self.p.mu):
                 p1 = self.selection(population)
                 p2 = self.selection(population)
@@ -749,10 +753,7 @@ class r0123456:
                 self.mutation(offspring[i],alphas_offspring[i])
                 ### apply local search operator to the offspring ###
                 if self.lsogrowth > np.random.random():
-                    offspring[i] = opt2Sample(self.distanceMatrix,offspring[i],percent=wandb.config.LSOPercent)
-
-                    
-                
+                    offspring[i] = randomOpt2(self.distanceMatrix,offspring[i],percentage=wandb.config.LSOPercent)
             end = timer()
             self.timings["Create offspring + LSO"] = end - start
 
@@ -760,12 +761,13 @@ class r0123456:
             ### Mutate the original population and apply local search operator ###
             start = timer()
             for i,ind in enumerate(population):
-                self.mutation(ind,alphas[i])
-                if self.lsogrowth > np.random.random():
-                    population[i] = opt2Sample(self.distanceMatrix,ind,percent=wandb.config.LSOPercent)
+                if not np.equal(ind,bestSolution).all():
+                    self.mutation(ind,alphas[i])
+                    if self.lsogrowth > np.random.random():
+                        population[i] = randomOpt2(self.distanceMatrix,ind,percentage=wandb.config.LSOPercent)
+                else:
+                    population[i] = opt2(self.distanceMatrix,ind)
                 
-        
-
             end = timer()
             self.timings["Mutation + LSO"] = end - start
 
@@ -777,7 +779,12 @@ class r0123456:
                 population = self.elimination(population,offspring)
             self.timings["Elimination"] = timer() - start
 
-            fitnesses = np.array([fitness(self.distanceMatrix,i) for i in population])
+            # calculate fintesses
+            fitnesses = np.zeros((self.p.lamb))
+            for i in range(self.p.lamb):
+                fitnesses[i] = fitness(self.distanceMatrix,population[i])
+
+
             
             meanObjective = np.mean(fitnesses)
             bestObjective = np.min(fitnesses)
@@ -786,21 +793,27 @@ class r0123456:
             diversityScore = len(set(fitnesses))
 
             timeLeft = self.reporter.report(meanObjective, bestObjective, bestSolution)
-            self.timeLeft = timeLeft
+        
             print("Mean objective: ", round(meanObjective,2),"     Best Objective: ", round(bestObjective,2),"     Iteration: ",self.iter, "     Diversity score: ", diversityScore, "     Time left: ", round(timeLeft,2))
             if self.p.wandb:
                 wandb.log({"mean objective": meanObjective, "best objective": bestObjective, "diversity score": diversityScore} | 
                           self.timings |
                           {"used dist map": self.used_dist_map} |
                           {"solution": bestSolution.tolist()} |
-                          {"elimdecay": self.elimdecay, "LSOgrowth": self.lsogrowth,"lambDecay":self.p.lamb} |
-                          {"time left": timeLeft,"time": 300-timeLeft} )
+                          {"elimdecay": self.elimdecay, "LSOgrowth": self.lsogrowth,"lambDecay":self.p.lamb,"mutationDecay": self.p.alpha} |
+                          {"time left": timeLeft,"time": 300-timeLeft} |
+                          {"distance map size": len(self.distanceMap),"fitness map size":len(self.fitnessMap)} )
 
             if timeLeft < 0:
                 break
+
+            # update parameter control
+            self.timeLeft = timeLeft
             self.lsogrowth = self.LSOGrowth(timeLeft)
             self.elimdecay = self.sharedEliminDecay(timeLeft)
             self.p.lamb = self.lambDecay(timeLeft)
+            self.p.mu = self.p.lamb
+            self.p.alpha = self.mutationDecay(timeLeft)
             
 
         return bestObjective
@@ -831,6 +844,12 @@ class TSPProblem:
 
 class Parameters:
     def __init__(self, lamb, mu, num_iters, k,alpha,alpha_sharing,sigmaPerc):
+        toursize = 200
+        self.lambStart = -0.20 * toursize + 230
+        self.lambEnd = 20
+        self.lambDecay_n = 0.8
+
+
         self.lamb = lamb  # Population size
         self.mu = mu  # Amount of offspring
         self.num_iters = num_iters  # How many times to create offspring
@@ -848,38 +867,48 @@ if __name__ == "__main__":
 
     
     #wandb.init()
-    # tourNumber = wandb.config.tour
-    #tour =  f"Data/tour{tourNumber}.csv"
+    # # tourNumber = wandb.config.tour
+    # #tour =  f"Data/tour{tourNumber}.csv"
 
-    
     wandb.init(project="GAEC")
+    
+    wandb.config.lambStart = 180
+    wandb.config.lambEnd = 20
+    wandb.config.lambDecay_n = 0.8
+    
     wandb.config.recombination = "basic"
     wandb.config.mutation = "inversion"
 
-    wandb.config.LSO_alpha = 2#2 #0.97
-    wandb.config.LSO_n = 1#4
-    wandb.config.LSO_c = 0.3
+    wandb.config.LSO_alpha = 5
+    wandb.config.LSO_n = 5
+    wandb.config.LSO_c = 0.1 # 0.15
 
-    wandb.config.sharedElimDecay_alpha = 1
+    wandb.config.LSOPercent = 0.3
+    
+    wandb.config.sharedElimDecay_alpha = 0.8
     wandb.config.sharedElimDecay_n = 50
-    wandb.config.sharedElimDecay_c = 00
+    wandb.config.sharedElimDecay_c = 0
 
-    wandb.config.lambStart = 100
-    wandb.config.lambEnd = 30
-    wandb.config.lambDecay_n = 0.6
 
-    wandb.config.alpha_sharing = 2.5
-    wandb.config.sigmaPerc = 0.3
-    wandb.config.percent_greedy_init = 0.20 #0.05
+    wandb.config.alpha_sharing = 1.5
+    wandb.config.sigmaPerc = 0.5
 
-    wandb.config.lamb = wandb.config.lambStart #40
-    wandb.config.mu = wandb.config.lambStart #40
-    wandb.config.k = 7
+    wandb.config.percent_greedy_init = 0.2
+    
+    wandb.config.alphaStart = 0.4
+    wandb.config.alphaEnd = 0.1
+    wandb.config.alphaDecay_n = 0.4
+
+
     wandb.config.alpha = 0.1
 
-    wandb.config.LSOPercent = 0.9
+
+    wandb.config.lamb = 50 #40
+    wandb.config.mu = wandb.config.lambStart #40
+    wandb.config.k = 5
+
     
-    wandb.config.tour = 750
+    wandb.config.tour = 200
     tour =  f"Data/tour{wandb.config.tour}.csv"
     
     

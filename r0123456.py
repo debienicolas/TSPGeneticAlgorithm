@@ -4,6 +4,8 @@ import copy
 from hmac import new
 from math import dist
 from operator import index, mod
+from re import sub
+from token import OP
 from turtle import st
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -41,9 +43,10 @@ def fitness(distanceMatrix,individual):
     # return np.sum(distanceMatrix[indices[:,0],indices[:,1]])
     distance = 0
     for i in indices:
-        if distanceMatrix[i[0],i[1]] >= INF:
-            return np.inf
-        distance += distanceMatrix[i[0],i[1]]
+        if np.isinf(distanceMatrix[i[0],i[1]]):
+            distance += INF
+        else:
+            distance += distanceMatrix[i[0],i[1]]
     return distance
 
 # @njit
@@ -155,43 +158,15 @@ def initializePopulation(distanceMatrix, lamb, percent_greedy=0.1):
     for i in range(greedy):
         population[i + random_legal] = initialize_greedily(distanceMatrix)
     return population
-    
-
-def nearest_neighbor(dist_matrix, lamb, k):
-    n = len(dist_matrix)
-    population = np.zeros((lamb, n),dtype=int)
-
-    k = int(lamb*k)
-
-    for i in range(k):
-        start = np.random.randint(0,n)
-        tour = [start]
-        visited = set([start])
-        while len(tour) < n:
-            last =  tour[-1]
-            next_city = None
-            min_dist = INF
-
-            for j in range(n):
-                if j not in visited and 0 < dist_matrix[last,j] < min_dist:
-                    next_city = j
-                    min_dist = dist_matrix[last,j]
-            tour.append(next_city)
-            visited.add(next_city)
-
-        population[i] = np.array(tour)
-    for i in range(k,lamb):
-        population[i] = np.random.permutation(n)
-    return population
 
 @njit
-def opt2swap(indv1, i,j):
+def opt2swap(indv1, i, j):
     new_order = np.empty_like(indv1)
-    # take route[0] to route[i] and add them in order to new_route
-    new_order[:i+1] = indv1[:i+1]
-    # take route[i+1] to route[j] and add them in reverse order to new_route
-    new_order[i+1:j+1] = indv1[j:i:-1]
-    # take route[j+1] to end and add them in order to new_route
+    # take route[0] to route[i] and add them in order to new_order
+    new_order[:i] = indv1[:i]
+    # take route[i] to route[j] and add them in reverse order to new_order
+    new_order[i:j+1] = indv1[j:i-1:-1]
+    # take route[j+1] to end and add them in order to new_order
     new_order[j+1:] = indv1[j+1:]
     return new_order
 
@@ -203,7 +178,7 @@ def opt2invert(ind1,i,j):
     new_order[j+1:] = ind1[j+1:]
     return new_order
 
-@jit
+@njit
 def opt2(distM, indv):
     size = indv.size
     best_indiv = indv
@@ -235,23 +210,62 @@ def opt2withInversion(distM,indv):
                     current_best = new_fitness
     return best_indiv
 
+@njit 
+def singleFitness(distanceMatric,i,j):
+    distance = distanceMatric[i,j]
+    if distance == np.inf:
+        return INF
+    return distance
+@njit
+def acc_fitness(distM,indv):
+    size = len(indv)
+    acc = np.empty(size+1,dtype=float)
+    acc[0] = 0
+    for i in range(size-1):
+        a1 = indv[i]
+        a2 = indv[i+1]
+        dist = singleFitness(distM,a1,a2)
+        acc[i+1] = acc[i] + dist
+    acc[size] = acc[size-1] + singleFitness(distM,indv[size-1],indv[0])
+    return acc
 
 @njit
+def calc_two_opt_fit(dm ,route, pd: np.ndarray, rd: np.ndarray, i:int, j: int) -> float:
+    orig = pd[-1]
+    #assert pd[-1] == fitness(dm,route)
+    
+    # deleted arcs distances
+    t1 = dm[route[i-1]][route[i]]
+    t2 = dm[route[j]][route[j+1]]
+    # added arcs distances
+    t3 = dm[route[i-1]][route[j]]
+    t4 = dm[route[i]][route[j+1]]
+
+    after = orig - t1 - t2 + t3 + t4
+    pd_del = pd[j] - pd[i]
+    n = len(route)
+    rd_add = rd[n - 1 - i] - rd[n - 1 - j]
+    after = after - pd_del + rd_add
+    return after
+
+
 def randomOpt2(distM,indv, percentage=0.9):
-    best_indiv = indv
-    current_best = fitness(distM,indv)
+    best_fitness = fitness(distM,indv)
+    best_indv = indv
     size = indv.size
-    subsample = np.random.choice(size-1,int(percentage*size),replace=False)
+    # subsample from 1 to size-2
+    subsample = np.random.choice(size-3,int(percentage*size),replace=False)
+    subsample += 1
+    pd = acc_fitness(distM,indv)
+    rd = acc_fitness(distM,indv[::-1])
     for i in subsample:
-        for j in range(i+1,size):
-            lengthDelta = -distM[indv[i],indv[i+1]] - distM[indv[j],indv[(j+1)]] + distM[indv[i+1],indv[j+1]] + distM[indv[i],indv[j]]
-            if lengthDelta < 0:
-                new_order = opt2swap(indv,i,j)
-                new_fitness = fitness(distM,new_order)
-                if new_fitness < current_best:
-                    best_indiv = new_order
-                    current_best = new_fitness
-    return best_indiv
+        for j in range(i+1,size-1):
+            new_fitness = calc_two_opt_fit(distM,indv,pd,rd,i,j)
+            if new_fitness < best_fitness and not np.isinf(new_fitness) and new_fitness < INF:
+                best_indv = opt2swap(indv,i,j)
+                best_fitness = fitness(distM,best_indv)
+
+    return best_indv
 
 
 
@@ -345,6 +359,42 @@ def basicrossover(indv1, indv2,offspring):
                     candidate = find_alternate_candidate(indv1,indv2,candidate)
                 offspring[i] = candidate
         return offspring
+@njit
+def select_next_city(current_city, parent1, parent2, visited ,distance_matrix):
+    idx_p1 = np.where(parent1 == current_city)[0][0]
+    idx_p2 = np.where(parent2 == current_city)[0][0]
+
+    next_city_p1 = parent1[(idx_p1 + 1) % len(parent1)]
+    next_city_p2 = parent2[(idx_p2 + 1) % len(parent2)]
+
+    if visited[next_city_p1] and visited[next_city_p2]:
+        # Both are visited, choose the a random unvisited city
+        unvisited = np.where(visited == False)[0]
+        return np.random.choice(unvisited)
+    elif visited[next_city_p1]:
+        return next_city_p2
+    elif visited[next_city_p2]:
+        return next_city_p1
+    else:
+        # Neither are visited, choose the closest
+        if distance_matrix[current_city, next_city_p1] < distance_matrix[current_city, next_city_p2]:
+            return next_city_p1
+        else:
+            return next_city_p2
+
+@njit
+def scx(parent1, parent2,offspring,visited_cities,distance_matrix):
+    current_city = np.random.choice(parent1)  
+
+    offspring[0] = current_city
+    visited_cities[current_city] = True
+
+    for i in range(1,len(parent1)):
+        next_city = select_next_city(current_city, parent1, parent2,visited_cities,distance_matrix)
+        visited_cities[next_city] = True
+        offspring[i] = next_city
+
+    return offspring
 
 
 class r0123456:
@@ -360,8 +410,8 @@ class r0123456:
     def convergenceTest(self):
         self.iter += 1
         # same fitness for 300 iterations
-        # if self.iter > 300 and len(set(self.fitnesses[-300:])) == 1:
-        #     return False
+        if self.iter > 300 and len(set(self.fitnesses[-300:])) == 1:
+            return False
         return True
     
     # k-tournament selection
@@ -371,12 +421,12 @@ class r0123456:
         return chosen[np.argmin(fvals)]
     
     # k-tournament selection with fitness sharing
-    def SharingSelection(self,population,p1):
-        chosen_indices = np.random.choice(self.p.lamb,self.p.k,replace=False)
-        chosen = population[chosen_indices]
-        modifiedFitnesses = self.sharedFitnessWrapper(chosen, p1)
-        best_index = chosen_indices[np.argmin(modifiedFitnesses)]
-        return population[best_index]
+    # def SharingSelection(self,population,p1):
+    #     chosen_indices = np.random.choice(self.p.lamb,self.p.k,replace=False)
+    #     chosen = population[chosen_indices]
+    #     modifiedFitnesses = self.sharedFitnessWrapper(chosen, p1)
+    #     best_index = chosen_indices[np.argmin(modifiedFitnesses)]
+    #     return population[best_index]
 
     
     # Mutation wrapper function
@@ -397,6 +447,7 @@ class r0123456:
     
 
     def recombination(self,parent1,parent2):
+        
         if self.p.wandb:
             if wandb.config.recombination == "order":
                 return orderCrossover(parent1,parent2,np.zeros(parent1.size,dtype=int))
@@ -413,6 +464,8 @@ class r0123456:
                     return idv1
                 else:
                     return idv2
+            elif wandb.config.recombination == "scx":
+                return scx(parent1,parent2,np.zeros(parent1.size,dtype=int),np.zeros(parent1.size,dtype=bool),self.distanceMatrix)
     
     def basicrossover(self,indv1, indv2):
         solution = np.zeros(indv1.size, dtype=int)
@@ -601,7 +654,7 @@ class r0123456:
     def sharedElimination(self, population, offspring):
         combined = np.concatenate((population,offspring), axis=0)
         survivors = np.zeros((self.p.lamb,self.length),dtype=int)
-        fitnesses = np.array([self.fitnessMap.get(hash(standardise(ind).tobytes()),fitness(self.distanceMatrix,ind)) for ind in combined])
+        fitnesses = np.array([fitness(self.distanceMatrix,ind) for ind in combined])
         for i in range(self.p.lamb):
             if i == 0:
                 best_idx = np.argmin(fitnesses)
@@ -677,12 +730,11 @@ class r0123456:
         self.lsogrowth = self.LSOGrowth(300)
         self.fitnesses = []
         self.timeLeft = 300
-            
+        
+        bestSolution = np.empty((self.length),dtype=int)
     
         while(self.convergenceTest()):
-            self.p.mu = self.p.lamb
-            self.p.alpha = self.mutationDecay(self.timeLeft)
-
+            
             
             ### Create offspring population ### 
             start = timer()
@@ -708,7 +760,8 @@ class r0123456:
             ### Mutate the original population and apply local search operator ###
             start = timer()
             for i,ind in enumerate(population):
-                self.mutation(ind,alphas[i])
+                if not np.equal(ind,bestSolution).all():
+                    self.mutation(ind,alphas[i])
                 if self.lsogrowth > np.random.random():
                     population[i] = randomOpt2(self.distanceMatrix,ind,percentage=wandb.config.LSOPercent)
             end = timer()
@@ -725,12 +778,7 @@ class r0123456:
             # calculate fintesses
             fitnesses = np.zeros((self.p.lamb))
             for i in range(self.p.lamb):
-                key = hash(standardise(population[i]).tobytes())
-                fitn = self.fitnessMap.get(key,None)
-                if fitn is None:
-                    fitn = fitness(self.distanceMatrix,population[i])
-                    self.fitnessMap[key] = fitn
-                fitnesses[i] = fitn
+                fitnesses[i] = fitness(self.distanceMatrix,population[i])
 
 
             
@@ -741,7 +789,7 @@ class r0123456:
             diversityScore = len(set(fitnesses))
 
             timeLeft = self.reporter.report(meanObjective, bestObjective, bestSolution)
-            self.timeLeft = timeLeft
+        
             print("Mean objective: ", round(meanObjective,2),"     Best Objective: ", round(bestObjective,2),"     Iteration: ",self.iter, "     Diversity score: ", diversityScore, "     Time left: ", round(timeLeft,2))
             if self.p.wandb:
                 wandb.log({"mean objective": meanObjective, "best objective": bestObjective, "diversity score": diversityScore} | 
@@ -754,9 +802,14 @@ class r0123456:
 
             if timeLeft < 0:
                 break
+
+            # update parameter control
+            self.timeLeft = timeLeft
             self.lsogrowth = self.LSOGrowth(timeLeft)
             self.elimdecay = self.sharedEliminDecay(timeLeft)
             self.p.lamb = self.lambDecay(timeLeft)
+            self.p.mu  = self.p.lamb
+            self.p.alpha = self.mutationDecay(timeLeft)
             
 
         return bestObjective
@@ -803,44 +856,50 @@ class Parameters:
 if __name__ == "__main__":
 
     
-    wandb.init()
+    #wandb.init()
     # # tourNumber = wandb.config.tour
     # #tour =  f"Data/tour{tourNumber}.csv"
 
+    wandb.init(project="GAEC")
     
-    # wandb.init(project="GAEC")
-    # wandb.config.recombination = "basic"
-    # wandb.config.mutation = "inversion"
-
-    # wandb.config.LSO_alpha = 5#2 #0.97
-    # wandb.config.LSO_n = 2#4
-    # wandb.config.LSO_c = 0
-
-    # wandb.config.sharedElimDecay_alpha = 0.8
-    # wandb.config.sharedElimDecay_n = 50
-    # wandb.config.sharedElimDecay_c = 0
-
-    # wandb.config.lambStart = 150
-    # wandb.config.lambEnd = 50
-    # wandb.config.lambDecay_n = 0.6
-
-    # wandb.config.alpha_sharing = 2.5
-    # wandb.config.sigmaPerc = 0.3
-    # wandb.config.percent_greedy_init = 0.05 #0.05
+    wandb.config.lambStart = 15
+    wandb.config.lambEnd = 15
+    wandb.config.lambDecay_n = 0.8
     
-    # wandb.config.alpha = 0.1
-    # wandb.config.alphaStart = 0.5
-    # wandb.config.alphaEnd = 0.1
-    # wandb.config.alphaDecay_n = 0.4
+    wandb.config.recombination = "basic"
+    wandb.config.mutation = "inversion"
 
+    wandb.config.LSO_alpha = 5
+    wandb.config.LSO_n = 5
+    wandb.config.LSO_c = 0.1 # 0.15
 
-    # wandb.config.lamb = wandb.config.lambStart #40
-    # wandb.config.mu = wandb.config.lambStart #40
-    # wandb.config.k = 6
-
-    # wandb.config.LSOPercent = 0.9
+    wandb.config.LSOPercent = 0.7
     
-    # wandb.config.tour = 200
+    wandb.config.sharedElimDecay_alpha = 0.8
+    wandb.config.sharedElimDecay_n = 50
+    wandb.config.sharedElimDecay_c = 0
+
+
+    wandb.config.alpha_sharing = 2.5
+    wandb.config.sigmaPerc = 0.3
+
+    wandb.config.percent_greedy_init = 0.2
+    
+    wandb.config.alphaStart = 0.4
+    wandb.config.alphaEnd = 0.1
+    wandb.config.alphaDecay_n = 0.4
+
+
+    wandb.config.alpha = 0.1
+
+
+    wandb.config.lamb = wandb.config.lambStart #40
+    wandb.config.mu = wandb.config.lambStart #40
+    wandb.config.k = 5
+
+    
+    
+    wandb.config.tour = 750
     tour =  f"Data/tour{wandb.config.tour}.csv"
     
     
