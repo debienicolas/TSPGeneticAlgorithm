@@ -691,8 +691,7 @@ class r0123456:
                 self.mutation(offspring[i],alphas_offspring[i])
                 ### apply local search operator to the offspring ###
                 if self.lsogrowth > np.random.random():
-                    if wandb.config.LSOPercent > np.random.random():
-                        offspring[i] = opt2(self.distanceMatrix,offspring[i])
+                    offspring[i] = opt2Sample(self.distanceMatrix,offspring[i],wandb.config.LSOPercent)
             end = timer()
             self.timings["Create offspring + LSO"] = end - start
 
@@ -702,10 +701,8 @@ class r0123456:
             for i,ind in enumerate(population):
                 if not np.equal(ind,bestSolution).all():
                     self.mutation(ind,alphas[i])
-                    if self.lsogrowth > np.random.random():
-                        population[i] = opt2Sample(self.distanceMatrix,ind,percent=wandb.config.LSOPercent)
-                else:
-                    population[i] = opt2(self.distanceMatrix,ind)
+                if self.lsogrowth > np.random.random():
+                    population[i] = opt2Sample(self.distanceMatrix,ind,percent=wandb.config.LSOPercent)
             end = timer()
             self.timings["Mutation + LSO"] = end - start
 
@@ -774,42 +771,42 @@ class Parameters:
 if __name__ == "__main__":
 
 
-    # wandb.init(project="GAEC")    
-    # wandb.config.lambStart = 70
-    # wandb.config.lambEnd = 20
-    # wandb.config.lambDecay_n = 0.8
+    wandb.init(project="GAEC")    
+    wandb.config.lambStart = 80
+    wandb.config.lambEnd = 20
+    wandb.config.lambDecay_n = 0.8
     
-    # wandb.config.LSOPercent = 0.3
-    # wandb.config.percent_greedy_init = 0.2
+    wandb.config.LSOPercent = 0.9
+    wandb.config.percent_greedy_init = 0.2
     
-    # wandb.config.recombination = "basic"
-    # wandb.config.mutation = "inversion"
+    wandb.config.recombination = "basic"
+    wandb.config.mutation = "inversion"
 
-    # wandb.config.alpha_sharing = 1.5
-    # wandb.config.sigmaPerc = 0.1
+    wandb.config.alpha_sharing = 1.5
+    wandb.config.sigmaPerc = 0.4
 
-    # wandb.config.LSO_alpha = 5
-    # wandb.config.LSO_n = 4
-    # wandb.config.LSO_c = 0.0 # 0.15
+    wandb.config.LSO_alpha = 5
+    wandb.config.LSO_n = 4
+    wandb.config.LSO_c = 0.2 # 0.15
 
-    # wandb.config.sharedElimDecay_alpha = 1
-    # wandb.config.sharedElimDecay_n = 15
-    # wandb.config.sharedElimDecay_c = 0
+    wandb.config.sharedElimDecay_alpha = 1
+    wandb.config.sharedElimDecay_n = 15
+    wandb.config.sharedElimDecay_c = 0
 
     
-    # wandb.config.alphaStart = 0.3
-    # wandb.config.alphaEnd = 0.1
-    # wandb.config.alphaDecay_n = 0.4
-    # wandb.config.alpha = 0.1
+    wandb.config.alphaStart = 0.3
+    wandb.config.alphaEnd = 0.1
+    wandb.config.alphaDecay_n = 0.4
+    wandb.config.alpha = 0.1
 
-    # wandb.config.lamb = 50 #40
-    # wandb.config.mu = wandb.config.lambStart #40
-    # wandb.config.k = 7
+    wandb.config.lamb = wandb.config.lambStart #40
+    wandb.config.mu = wandb.config.lambStart #40
+    wandb.config.k = 7
 
     
     # wandb.config.tour = 750
 
-    wandb.init()
+    #wandb.init()
     tour =  f"Data/tour{wandb.config.tour}.csv"
     
     p = Parameters(lamb=wandb.config.lambStart, mu=wandb.config.lambStart,num_iters=5000,k=wandb.config.k,alpha=wandb.config.alpha,alpha_sharing=wandb.config.alpha_sharing,sigmaPerc=wandb.config.sigmaPerc)

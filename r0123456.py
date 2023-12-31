@@ -775,22 +775,22 @@ if __name__ == "__main__":
 
 
     wandb.init(project="GAEC")    
-    wandb.config.lambStart = 60
-    wandb.config.lambEnd = 20
+    wandb.config.lambStart = 80
+    wandb.config.lambEnd = 40
     wandb.config.lambDecay_n = 1.6
     
-    wandb.config.LSOPercent = 0.5
+    wandb.config.LSOPercent = 0.9
     wandb.config.percent_greedy_init = 0.2
     
     wandb.config.recombination = "basic"
     wandb.config.mutation = "inversion"
 
     wandb.config.alpha_sharing = 1.5
-    wandb.config.sigmaPerc = 0.5
+    wandb.config.sigmaPerc = 0.3
 
     wandb.config.LSO_alpha = 5
     wandb.config.LSO_n = 4
-    wandb.config.LSO_c = 0.0 # 0.15
+    wandb.config.LSO_c = 0.2 # 0.15
 
     wandb.config.sharedElimDecay_alpha = 1
     wandb.config.sharedElimDecay_n = 15
@@ -807,7 +807,7 @@ if __name__ == "__main__":
     wandb.config.k = 7
 
     
-    wandb.config.tour = 1000
+    wandb.config.tour = 50
 
     tour =  f"Data/tour{wandb.config.tour}.csv"
     

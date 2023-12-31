@@ -1,13 +1,10 @@
-from cv2 import distanceTransform
 import Reporter
 import numpy as np
 import random
 from timeit import default_timer as timer
-from numba import jit, njit
-
+from numba import jit, njit,prange
 import math
 
-from numba import jit, prange
 
 INF = 1000000000000000
 
@@ -29,7 +26,7 @@ def fitness(distanceMatrix,individual):
     distance = 0
     for i in indices:
         if distanceMatrix[i[0],i[1]] == np.inf:
-            return np.inf
+            distance += INF
         else:
             distance += distanceMatrix[i[0],i[1]]
     return distance
@@ -195,7 +192,7 @@ def opt2Sample(distM,indv,percent= 0.3):
     for i in subsample_1:
         for j in range(i+1,size-2):
             lengthDelta = -distM[indv[i-1],indv[i]] - distM[indv[j],indv[(j+1)]] + distM[indv[i],indv[j+1]] + distM[indv[i-1],indv[j]]
-            if lengthDelta < 0:
+            if lengthDelta < 0 and not np.isinf(lengthDelta):
                 new_order = opt2swap(indv,i,j)
                 new_fitness = fitness(distM,new_order)
                 if new_fitness < current_best:
@@ -375,8 +372,8 @@ class r0810938:
     def convergenceTest(self):
         self.iter += 1
         # same fitness for 300 iterations
-        if self.iter > 300 and len(set(self.fitnesses[-300:])) == 1:
-            return False
+        # if self.iter > 300 and len(set(self.fitnesses[-300:])) == 1:
+        #     return False
         return True
     
     # k-tournament selection
@@ -615,6 +612,7 @@ class r0810938:
             self.p.alpha = self.mutationDecay(self.timeLeft)
             self.p.lamb = self.lambDecay(self.timeLeft)
             self.p.mu = self.p.lamb
+
             ### Create offspring population ### 
             start = timer()
             offspring = np.zeros((self.p.mu,self.length), dtype=int)
@@ -631,7 +629,7 @@ class r0810938:
                 self.mutation(offspring[i],alphas_offspring[i])
                 ### apply local search operator to the offspring ###
                 if self.lsogrowth > np.random.random():
-                    offspring[i] = twoOpt(self.distanceMatrix,offspring[i])
+                    offspring[i] = opt2Sample(self.distanceMatrix,offspring[i],self.p.LSOPercent)
             end = timer()
             self.timings["Create offspring + LSO"] = end - start
 
@@ -643,7 +641,7 @@ class r0810938:
                 if not np.equal(ind,bestSolution).all():
                     self.mutation(ind,alphas[i])
                 if self.lsogrowth > np.random.random():
-                    population[i] = twoOpt(self.distanceMatrix,ind)
+                    population[i] = opt2Sample(self.distanceMatrix,ind,self.p.LSOPercent)
                             
             end = timer()
             self.timings["Mutation + LSO"] = end - start
@@ -667,7 +665,7 @@ class r0810938:
             bestSolution = population[np.argmin(fitnesses)]
             diversityScore = len(set(fitnesses))
 
-            timeLeft = self.reporter.report(meanObjective, bestObjective, bestSolution)
+            timeLeft = self.reporter.report(meanObjective, bestObjective, standardise(bestSolution))
             self.timeLeft = timeLeft
             print("Mean objective: ", round(meanObjective,2),"     Best Objective: ", round(bestObjective,2),"     Iteration: ",self.iter, "     Diversity score: ", diversityScore, "     Time left: ", round(timeLeft,2))
             
@@ -682,34 +680,51 @@ class r0810938:
 class Parameters:
     def __init__(self, toursize):
         self.tour = toursize
+
+        if self.tour in [50,100,250,200,400,500,600]:
+            self.LSOPercent = 0.95
+            self.sigmaPerc = 0.2
+
+            self.lambStart = 100
+            self.lambEnd = 40
+
+        elif self.tour in [750,800,1000]:
+            self.LSOPercent = 0.95
+            self.sigmaPerc = 0.4
+
+            self.lambStart = 60
+            self.lambEnd = 20
+        else:
+            self.LSOPercent = 0.9
+            self.sigmaPerc = 0.3
+
+            self.lambStart = 80#80
+            self.lambEnd = 15 #40
+
+        ### Stays constant ###
         
         self.k = 5
-        self.alpha_sharing = 0.25
-        self.sigmaPerc = 0.5
-        self.sharedElimDecay_alpha = 1
-        self.sharedElimDecay_n = 15
-        self.sharedElimDecay_c = 0
+        self.percent_greedy_init = 0.2
 
+        self.alpha_sharing = 1.5
+        
         self.LSO_alpha = 5
         self.LSO_n = 4
         self.LSO_c = 0.2
-        self.LSOPercent = 0.1
 
         self.alpha = 0.1
         self.alphaStart = 0.3
         self.alphaEnd = 0.1
-        self.alphaDecay_n = 0.4
+        self.alphaDecay_n = 0.8
         
-        self.percent_greedy_init = 0.2
-        self.lambStart = 60#80
-        self.lambEnd = 20 #40
         self.lambDecay_n = 0.8
         self.lamb = self.lambStart
         self.mu = self.lamb
 
+        self.sharedElimDecay_alpha = 1
+        self.sharedElimDecay_n = 50
+        self.sharedElimDecay_c = 0
         
-
-
 
 
 if __name__ == "__main__":
