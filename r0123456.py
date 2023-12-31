@@ -43,19 +43,11 @@ def fitness(distanceMatrix,individual):
     # return np.sum(distanceMatrix[indices[:,0],indices[:,1]])
     distance = 0
     for i in indices:
-        if np.isinf(distanceMatrix[i[0],i[1]]):
-            distance += INF
+        if distanceMatrix[i[0],i[1]] == np.inf:
+            return np.inf
         else:
             distance += distanceMatrix[i[0],i[1]]
     return distance
-
-# @njit
-# def distance_2(indv1, indv2):
-#     edges1 = np.column_stack((indv1, np.roll(indv1, -1)))
-#     edges2 = np.column_stack((indv2, np.roll(indv2, -1)))
-#     similarity = np.sum(np.logical_and(edges1[:, 0, None] == edges2[:, 0], edges1[:, 1, None] == edges2[:, 1]))
-#     distance = indv1.size - similarity
-#     return distance
 
 @njit
 def distance(ind1,ind2):
@@ -71,7 +63,6 @@ def distance(ind1,ind2):
     return count_nonshared_edges
 
 
-@njit
 def initialize_legally(distance_matrix):
     num_cities = distance_matrix.shape[0]
     permutation = np.empty(num_cities, dtype=np.int64)
@@ -122,33 +113,6 @@ def initialize_greedily(distanceMatrix: np.ndarray):
     return order
 
 
-def initialize_greedily_k_tournament(distanceMatrix: np.ndarray, k: int):
-    length = distanceMatrix.shape[0]
-    order = -np.ones(length, dtype=int)
-    city = np.random.randint(0, length)
-    order[0] = city
-    i = 1
-
-    while i < length:
-        possibilities = set(range(length)) - set(order[order >= 0])
-        
-        if len(possibilities) < k:
-            k = len(possibilities)  # Reduce k if fewer possibilities are left
-
-        if not possibilities:
-            break
-
-        # Perform k-tournament selection
-        tournament_cities = np.random.choice(list(possibilities), k, replace=False)
-        city = min(tournament_cities, key=lambda x: distanceMatrix[order[i - 1]][x])
-
-        order[i] = city
-        i += 1
-
-    return order
-
-
-
 def initializePopulation(distanceMatrix, lamb, percent_greedy=0.1):
     population = np.zeros((lamb, len(distanceMatrix)), dtype=int)
     greedy = int(lamb * percent_greedy)
@@ -178,21 +142,6 @@ def opt2invert(ind1,i,j):
     new_order[j+1:] = ind1[j+1:]
     return new_order
 
-@njit
-def opt2(distM, indv):
-    size = indv.size
-    best_indiv = indv
-    current_best = fitness(distM, indv)
-    for i in prange(size - 1):
-        for j in prange(i + 1, size):
-            lengthDelta = -distM[indv[i], indv[i + 1]] - distM[indv[j], indv[(j + 1)]] + distM[indv[i + 1], indv[j + 1]] + distM[indv[i], indv[j]]
-            if lengthDelta < 0:
-                new_order = opt2swap(indv, i, j)
-                new_fitness = fitness(distM, new_order)
-                if new_fitness < current_best:
-                    best_indiv = new_order
-                    current_best = new_fitness
-    return best_indiv
 
 @njit
 def opt2withInversion(distM,indv):
@@ -249,23 +198,59 @@ def calc_two_opt_fit(dm ,route, pd: np.ndarray, rd: np.ndarray, i:int, j: int) -
     return after
 
 
-def randomOpt2(distM,indv, percentage=0.9):
-    best_fitness = fitness(distM,indv)
+# def randomOpt2(distM,indv, percentage=0.9):
+#     best_fitness = fitness(distM,indv)
+#     best_indv = indv
+#     size = indv.size
+#     # subsample from 1 to size-2
+#     subsample = np.random.choice(size-3,int(percentage*size),replace=False)
+#     subsample += 1
+#     pd = acc_fitness(distM,indv)
+#     rd = acc_fitness(distM,indv[::-1])
+#     for i in range(1,size-2):
+#         for j in range(i+1,size-1):
+#             if np.random.random() < percentage:
+#                 new_fitness = calc_two_opt_fit(distM,indv,pd,rd,i,j)
+#                 if new_fitness < best_fitness and not np.isinf(new_fitness) and new_fitness < INF:
+#                     best_indv = opt2swap(indv,i,j)
+#                     best_fitness = fitness(distM,best_indv)
+
+#     return best_indv
+
+@njit
+def opt2Sample(distM,indv,percent= 0.3):
     best_indv = indv
+    current_best = fitness(distM,indv)
     size = indv.size
-    # subsample from 1 to size-2
-    subsample = np.random.choice(size-3,int(percentage*size),replace=False)
-    subsample += 1
+    subsample_1 = np.random.choice(size-3,int(percent*size),replace=False)
+    subsample_1 += 1
+    for i in subsample_1:
+        for j in range(i+1,size-2):
+            lengthDelta = -distM[indv[i-1],indv[i]] - distM[indv[j],indv[(j+1)]] + distM[indv[i],indv[j+1]] + distM[indv[i-1],indv[j]]
+            if lengthDelta < 0:
+                new_order = opt2swap(indv,i,j)
+                new_fitness = fitness(distM,new_order)
+                if new_fitness < current_best:
+                    best_indv = new_order
+                    current_best = new_fitness
+    return best_indv
+
+
+@njit
+def opt2(distM, indv):
+    size = indv.size
+    best_indiv = indv
+    current_best = fitness(distM, indv)
     pd = acc_fitness(distM,indv)
     rd = acc_fitness(distM,indv[::-1])
-    for i in subsample:
-        for j in range(i+1,size-1):
+    for i in prange(1,size - 2):
+        for j in prange(i + 1, size-1):
             new_fitness = calc_two_opt_fit(distM,indv,pd,rd,i,j)
-            if new_fitness < best_fitness and not np.isinf(new_fitness) and new_fitness < INF:
-                best_indv = opt2swap(indv,i,j)
-                best_fitness = fitness(distM,best_indv)
+            if new_fitness < current_best and not np.isinf(new_fitness) and new_fitness < INF:
+                best_indiv = opt2swap(indv, i, j)
+                current_best = fitness(distM, best_indiv)
 
-    return best_indv
+    return best_indiv
 
 
 
@@ -299,7 +284,6 @@ def insertMutation(individual):
     print(i,j)
     # insert the city at position j in position i
     individual[i:j+1] = np.insert(individual[i:j],i,individual[j])
-
 
 def add_edge(s,n):
     if n in s:
@@ -410,8 +394,8 @@ class r0123456:
     def convergenceTest(self):
         self.iter += 1
         # same fitness for 300 iterations
-        if self.iter > 300 and len(set(self.fitnesses[-300:])) == 1:
-            return False
+        # if self.iter > 300 and len(set(self.fitnesses[-300:])) == 1:
+        #     return False
         return True
     
     # k-tournament selection
@@ -419,14 +403,6 @@ class r0123456:
         chosen = population[np.random.choice(self.p.lamb,self.p.k,replace=False)]
         fvals = np.array([fitness(self.distanceMatrix,ind) for ind in chosen])
         return chosen[np.argmin(fvals)]
-    
-    # k-tournament selection with fitness sharing
-    # def SharingSelection(self,population,p1):
-    #     chosen_indices = np.random.choice(self.p.lamb,self.p.k,replace=False)
-    #     chosen = population[chosen_indices]
-    #     modifiedFitnesses = self.sharedFitnessWrapper(chosen, p1)
-    #     best_index = chosen_indices[np.argmin(modifiedFitnesses)]
-    #     return population[best_index]
 
     
     # Mutation wrapper function
@@ -447,11 +423,12 @@ class r0123456:
     
 
     def recombination(self,parent1,parent2):
-        
         if self.p.wandb:
             if wandb.config.recombination == "order":
                 return orderCrossover(parent1,parent2,np.zeros(parent1.size,dtype=int))
             elif wandb.config.recombination == "basic":
+                return basicrossover(parent1,parent2,np.zeros(parent1.size,dtype=int))
+            elif wandb.config.recombination == ["basic"]:
                 return basicrossover(parent1,parent2,np.zeros(parent1.size,dtype=int))
             elif wandb.config.recombination == "edge":
                 return self.edgeCrossover(parent1,parent2)
@@ -466,21 +443,6 @@ class r0123456:
                     return idv2
             elif wandb.config.recombination == "scx":
                 return scx(parent1,parent2,np.zeros(parent1.size,dtype=int),np.zeros(parent1.size,dtype=bool),self.distanceMatrix)
-    
-    def basicrossover(self,indv1, indv2):
-        solution = np.zeros(indv1.size, dtype=int)
-        min = np.random.randint(0, indv1.size - 1)
-        max = np.random.randint(0, indv1.size - 1)
-        if min > max:
-            min, max = max, min
-        solution[min:max] = indv1[min:max]
-        # i in alles wat er buiten zit
-        for i in np.concatenate([np.arange(0, min), np.arange(max, indv1.size)]):
-            candidate = indv2[i]
-            while candidate in indv1[min:max]:
-                candidate = indv2[np.where(indv1 == candidate)[0][0]]
-            solution[i] = candidate
-        return solution
     
     def edgeCrossover(self, indv1, indv2):
         # Construct edge table
@@ -584,33 +546,9 @@ class r0123456:
             cycle_num += 1
 
         return offspring1, offspring2
-
-    def lso(self, individual):
-        best_indiv = individual
-        current_best = fitness(self.distanceMatrix,individual)
-        for i in range(individual.size-1):
-            for j in range(i,individual.size-1):
-                new_order = individual.copy()
-                new_order[i], new_order[j] = new_order[j], new_order[i]
-                new_fitness = fitness(self.distanceMatrix,new_order)
-                if new_fitness < current_best:
-                    best_indiv = new_order
-        return best_indiv
     
-    def lsoSwap(self, individual, n=1):
-        best_indiv = individual
-        current_best = fitness(self.distanceMatrix,individual)
-        for i in range(individual.size-(n+1)):
-            for j in range(1,n):
-                new_order = individual.copy()
-                new_order[i],new_order[i+j] = new_order[i+j],new_order[i]
-                new_fitness = fitness(self.distanceMatrix,new_order)
-                if new_fitness < current_best:
-                    best_indiv = new_order
-        return best_indiv
-        
-
-    def sharedFitnessWrapper(self,orig_fitnesses, X, pop, betaInit = 0):
+    
+    def sharedFitnessWrapper(self,orig_fitnesses, X, pop, betaInit = 1):
         
         modFitnesses = np.zeros(X.shape[0])
 
@@ -628,19 +566,7 @@ class r0123456:
                 continue
             distances = np.zeros(pop.shape[0])
             for j,y in enumerate(pop):
-                # key1 = (standardise(x).tobytes(),standardise(y).tobytes())
-                # if key1 in self.distanceMap:
-                #     distances[j] = self.distanceMap[key1]
-                #     continue
-                # key2 = (standardise(y).tobytes(),standardise(x).tobytes())
-                # if key2 is self.distanceMap.get(key2,None):
-                #     distances[j] = self.distanceMap[key2]
-                #     continue
-                # else:
                     distances[j] = distance(x,y)
-                    #dist = distance(x,y)
-                    # self.distanceMap[key1] = dist
-            
             onePlusBeta = betaInit
             within_sigma = distances <= sigma
             onePlusBeta = betaInit + np.sum(1 - (distances[within_sigma] / sigma) ** alpha)
@@ -664,7 +590,18 @@ class r0123456:
                 # instead of calculating the updated fitness for all, only do it for the top 50% of the population ? 
                 # take random subset of the combined population
                 fpen = self.sharedFitnessWrapper(fitnesses,combined, survivors[0:i,:],betaInit=1)
+                # k-tournament selection, choose random k individuals and take the best one
+                chosenidx = np.random.choice(fpen.shape[0],self.p.k,replace=False)
+                # current_best = np.inf
+                # current_best_idx = None
+                # for idx in chosenidx:
+                #     if fpen[idx] < current_best:
+                #         current_best = fpen[idx]
+                #         current_best_idx = idx
+                
+
                 idx = np.argmin(fpen)
+                #idx = current_best_idx
                 survivors[i] = combined[idx]
                 np.delete(combined,idx,0)
         
@@ -716,6 +653,8 @@ class r0123456:
         self.distanceMap = {}
         self.fitnessMap = {}
 
+        
+
         ### Population initialization ###
         start = timer()
         population = initializePopulation(distanceMatrix, self.p.lamb,wandb.config.percent_greedy_init)
@@ -734,8 +673,8 @@ class r0123456:
         bestSolution = np.empty((self.length),dtype=int)
     
         while(self.convergenceTest()):
-            
-            
+            self.p.lamb = self.lambDecay(self.timeLeft)
+            self.p.mu = self.p.lamb
             ### Create offspring population ### 
             start = timer()
             offspring = np.zeros((self.p.mu,self.length), dtype=int)
@@ -752,7 +691,8 @@ class r0123456:
                 self.mutation(offspring[i],alphas_offspring[i])
                 ### apply local search operator to the offspring ###
                 if self.lsogrowth > np.random.random():
-                    offspring[i] = randomOpt2(self.distanceMatrix,offspring[i],percentage=wandb.config.LSOPercent)
+                    if wandb.config.LSOPercent > np.random.random():
+                        offspring[i] = opt2(self.distanceMatrix,offspring[i])
             end = timer()
             self.timings["Create offspring + LSO"] = end - start
 
@@ -762,15 +702,17 @@ class r0123456:
             for i,ind in enumerate(population):
                 if not np.equal(ind,bestSolution).all():
                     self.mutation(ind,alphas[i])
-                if self.lsogrowth > np.random.random():
-                    population[i] = randomOpt2(self.distanceMatrix,ind,percentage=wandb.config.LSOPercent)
+                    if self.lsogrowth > np.random.random():
+                        population[i] = opt2Sample(self.distanceMatrix,ind,percent=wandb.config.LSOPercent)
+                else:
+                    population[i] = opt2(self.distanceMatrix,ind)
             end = timer()
             self.timings["Mutation + LSO"] = end - start
 
             ### Shared fitness elimination ###
             start = timer()
             if self.elimdecay > np.random.random():
-                population = self.sharedElimination(population,offspring)
+                population = self.sharedElimination(population,offspring)          
             else:
                 population = self.elimination(population,offspring)
             self.timings["Elimination"] = timer() - start
@@ -779,8 +721,6 @@ class r0123456:
             fitnesses = np.zeros((self.p.lamb))
             for i in range(self.p.lamb):
                 fitnesses[i] = fitness(self.distanceMatrix,population[i])
-
-
             
             meanObjective = np.mean(fitnesses)
             bestObjective = np.min(fitnesses)
@@ -808,34 +748,12 @@ class r0123456:
             self.lsogrowth = self.LSOGrowth(timeLeft)
             self.elimdecay = self.sharedEliminDecay(timeLeft)
             self.p.lamb = self.lambDecay(timeLeft)
-            self.p.mu  = self.p.lamb
+            self.p.mu = self.p.lamb
             self.p.alpha = self.mutationDecay(timeLeft)
             
 
         return bestObjective
 
-
-class Individual:
-    def __init__(self, tsp, alpha, order=None):
-        self.alpha = max(alpha, alpha + 0.2 * random.random())
-        self.order = np.random.permutation(range(tsp.nCities))
-        self.size = len(self.order)
-        self.originalFitness = None
-        if order is not None:
-            self.order = order
-            self.size = len(self.order)
-        self.edges = None
-    
-    def get_edges(self):
-        if self.edges is None:
-            self.edges = list(zip(self.order,np.roll(self.order,-1)))
-        return self.edges
-
-
-class TSPProblem:
-    def __init__(self, distanceMatrix):
-        self.distanceMatrix = distanceMatrix
-        self.nCities = len(distanceMatrix)
 
 
 class Parameters:
@@ -848,76 +766,56 @@ class Parameters:
         self.wandb = True
         self.alpha_sharing = alpha_sharing
         self.sigmaPerc = sigmaPerc
-        #self.sharedElim = np.arange(0,wandb.config.fitness_sharing_stop_iter,wandb.config.fitness_sharing_occurrence)
-        #self.sharedElim = np.arange(0,120,1)
+        
+
 
 
 
 if __name__ == "__main__":
 
-    
-    #wandb.init()
-    # # tourNumber = wandb.config.tour
-    # #tour =  f"Data/tour{tourNumber}.csv"
 
-    wandb.init(project="GAEC")
+    wandb.init(project="GAEC")    
+    wandb.config.lambStart = 60
+    wandb.config.lambEnd = 20
+    wandb.config.lambDecay_n = 1.6
     
-    wandb.config.lambStart = 15
-    wandb.config.lambEnd = 15
-    wandb.config.lambDecay_n = 0.8
+    wandb.config.LSOPercent = 0.5
+    wandb.config.percent_greedy_init = 0.2
     
     wandb.config.recombination = "basic"
     wandb.config.mutation = "inversion"
 
-    wandb.config.LSO_alpha = 5
-    wandb.config.LSO_n = 5
-    wandb.config.LSO_c = 0.1 # 0.15
+    wandb.config.alpha_sharing = 1.5
+    wandb.config.sigmaPerc = 0.5
 
-    wandb.config.LSOPercent = 0.7
-    
-    wandb.config.sharedElimDecay_alpha = 0.8
-    wandb.config.sharedElimDecay_n = 50
+    wandb.config.LSO_alpha = 5
+    wandb.config.LSO_n = 4
+    wandb.config.LSO_c = 0.0 # 0.15
+
+    wandb.config.sharedElimDecay_alpha = 1
+    wandb.config.sharedElimDecay_n = 15
     wandb.config.sharedElimDecay_c = 0
 
-
-    wandb.config.alpha_sharing = 2.5
-    wandb.config.sigmaPerc = 0.3
-
-    wandb.config.percent_greedy_init = 0.2
     
-    wandb.config.alphaStart = 0.4
+    wandb.config.alphaStart = 0.3
     wandb.config.alphaEnd = 0.1
     wandb.config.alphaDecay_n = 0.4
-
-
     wandb.config.alpha = 0.1
 
-
-    wandb.config.lamb = wandb.config.lambStart #40
+    wandb.config.lamb = 50 #40
     wandb.config.mu = wandb.config.lambStart #40
-    wandb.config.k = 5
+    wandb.config.k = 7
 
     
-    
-    wandb.config.tour = 750
+    wandb.config.tour = 1000
+
     tour =  f"Data/tour{wandb.config.tour}.csv"
     
-    
-    # p = Parameters(lamb=15, mu=15,num_iters=1500,k=9,alpha=0.05,alpha_sharing=0.20,sigmaPerc=0.4)
     p = Parameters(lamb=wandb.config.lambStart, mu=wandb.config.lambStart,num_iters=5000,k=wandb.config.k,alpha=wandb.config.alpha,alpha_sharing=wandb.config.alpha_sharing,sigmaPerc=wandb.config.sigmaPerc)
     
-    # if p.wandb:
-    #     wandb.init(project="GAEC", config={"lamb": p.lamb, "mu": p.mu, "num_iters": p.num_iters, "k": p.k, "alpha": p.alpha, "tour":tourNumber, "alpha_sharing": p.alpha_sharing, "sigmaPerc": p.sigmaPerc})
-    
-      
-    # profiler = cProfile.Profile()
-    # profiler.enable()
     algo = r0123456(p)
     best = algo.optimize(tour)
-    # profiler.disable()
-    # profiler.dump_stats("profile.prof")
-    # stats = pstats.Stats("profile.prof")
-    # stats.sort_stats('cumulative').print_stats(20)
+   
 
     
 

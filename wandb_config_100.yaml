@@ -52,6 +52,6 @@ parameters:
   lambDecay_n:
     value: 0.8
   tour:
-    value: 50
+    value: 100
   
   
